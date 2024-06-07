@@ -260,7 +260,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 		if !rtbOK || !rtb.canRetry() {
 			// Request body cannot be re-sent to another backend. Return the error to the client then.
 			err = &httpserver.ErrorWithStatusCode{
-				Err:        fmt.Errorf("cannot proxy the request to %s: %w", targetURL, err),
+				Err:        fmt.Errorf("cannot proxy the request to %s: %w, rtbOK=%v, rtb.canRetry()=%v, %s", targetURL, err, rtbOK, rtb.canRetry(), rtb.String()),
 				StatusCode: http.StatusServiceUnavailable,
 			}
 			httpserver.Errorf(w, r, "%s", err)
@@ -280,8 +280,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 			// If we get an error from the retry_status_codes list, but cannot execute retry,
 			// we consider such a request an error as well.
 			err := &httpserver.ErrorWithStatusCode{
-				Err: fmt.Errorf("got response status code=%d from %s, but cannot retry the request on another backend, because the request has been already consumed",
-					res.StatusCode, targetURL),
+				Err:        fmt.Errorf("got response status code=%d from %s, but cannot retry the request on another backend, because the request has been already consumed, rtbOK=%v, rtb.canRetry()=%v, %s", res.StatusCode, targetURL, rtbOK, rtb.canRetry(), rtb.String()),
 				StatusCode: http.StatusServiceUnavailable,
 			}
 			httpserver.Errorf(w, r, "%s", err)
@@ -296,6 +295,9 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 		logger.Warnf("remoteAddr: %s; requestURI: %s; retrying the request to %s because response status code=%d belongs to retry_status_codes=%d",
 			remoteAddr, req.URL, targetURL, res.StatusCode, retryStatusCodes)
 		return false
+	} else {
+		// log
+		logger.Warnf("remoteAddr: %s; requestURI: %s; skip retrying the request to %s because response status code=%d not belongs to retry_status_codes=%v", httpserver.GetQuotedRemoteAddr(r), req.URL, targetURL, res.StatusCode, retryStatusCodes)
 	}
 	removeHopHeaders(res.Header)
 	copyHeader(w.Header(), res.Header)
@@ -499,6 +501,10 @@ type readTrackingBody struct {
 
 	// offset is an offset at buf for the next data read if needReadBuf is set to true.
 	offset int
+}
+
+func (rtb *readTrackingBody) String() string {
+	return fmt.Sprintf("readTrackingBody{cannotRetry: %v, needReadBuf: %v, bufLen: %d", rtb.cannotRetry, rtb.needReadBuf, len(rtb.buf))
 }
 
 // Read implements io.Reader interface
