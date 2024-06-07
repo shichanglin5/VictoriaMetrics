@@ -52,6 +52,6 @@ var Resolver = &net.Resolver{
 // Dialer is default network dialer.
 var Dialer = &net.Dialer{
 	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
+	KeepAlive: 90 * time.Second,
 	DualStack: TCP6Enabled(),
 }
