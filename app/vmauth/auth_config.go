@@ -306,6 +306,9 @@ func (up *URLPrefix) getBackendURL() *backendURL {
 
 	pbus := up.bus.Load()
 	bus := *pbus
+	if len(bus) == 0 {
+		return nil
+	}
 	if up.loadBalancingPolicy == "first_available" {
 		return getFirstAvailableBackendURL(bus)
 	}
@@ -353,7 +356,7 @@ func (up *URLPrefix) discoverBackendAddrsIfNeeded() {
 				logger.Warnf("cannot discover backend SRV records for %s: %s; use it literally", bu, err)
 				resolvedAddrs = []string{host}
 			} else {
-				resolvedAddrs := make([]string, len(addrs))
+				resolvedAddrs = make([]string, len(addrs))
 				for i, addr := range addrs {
 					resolvedAddrs[i] = fmt.Sprintf("%s:%d", addr.Target, addr.Port)
 				}
@@ -380,6 +383,7 @@ func (up *URLPrefix) discoverBackendAddrsIfNeeded() {
 	var busNew []*backendURL
 	for _, bu := range up.busOriginal {
 		host := bu.Hostname()
+		host = strings.TrimPrefix(host, "srv+")
 		port := bu.Port()
 		for _, addr := range hostToAddrs[host] {
 			buCopy := *bu
