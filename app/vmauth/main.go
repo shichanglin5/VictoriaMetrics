@@ -298,7 +298,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 		logger.Warnf("remoteAddr: %s; requestURI: %s; retrying the request to %s because response status code=%d belongs to retry_status_codes=%d",
 			remoteAddr, req.URL, targetURL, res.StatusCode, retryStatusCodes)
 		return false
-	} else {
+	} else if res.StatusCode/100 == 5 {
 		// log
 		logger.Warnf("remoteAddr: %s; requestURI: %s; skip retrying the request to %s because response status code=%d not belongs to retry_status_codes=%v", httpserver.GetQuotedRemoteAddr(r), req.URL, targetURL, res.StatusCode, retryStatusCodes)
 	}
