@@ -15,14 +15,14 @@ func mergeURLs(uiURL, requestURI *url.URL, dropSrcPathPrefixParts int) *url.URL 
 		targetURL.Path = strings.TrimSuffix(targetURL.Path, "/")
 	}
 	targetURL.Path += srcPath
-	requestParams := requestURI.Query()
+	defaultRequestParams := targetURL.Query()
 	// fast path
-	if len(requestParams) == 0 {
+	if len(defaultRequestParams) == 0 {
 		return &targetURL
 	}
 	// merge query parameters from requests.
-	uiParams := targetURL.Query()
-	for k, v := range requestParams {
+	uiParams := requestURI.Query()
+	for k, v := range defaultRequestParams {
 		// skip clashed query params from original request
 		if exist := uiParams.Get(k); len(exist) > 0 {
 			continue
