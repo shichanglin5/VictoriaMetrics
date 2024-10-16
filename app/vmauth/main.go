@@ -301,7 +301,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 			ui.backendErrors.Inc()
 			return true, false
 		}
-		if netutil.IsTrivialNetworkError(err) {
+		if netutil.IsTrivialNetworkError(err) || err == io.EOF {
 			// Retry request at the same backend on trivial network errors, such as proxy idle timeout misconfiguration or socket close by OS
 			return false, true
 		}
