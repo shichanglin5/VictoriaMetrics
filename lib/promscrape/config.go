@@ -1210,8 +1210,8 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// Remove labels with "__" prefix according to https://www.robustperception.io/life-of-a-label/
 	labels.RemoveLabelsWithDoubleUnderscorePrefix()
 	// Add missing "instance" label according to https://www.robustperception.io/life-of-a-label
-	if labels.Get("instance") == "" {
-		labels.Add("instance", address)
+	if labels.Get("ident") == "" {
+		labels.Add("ident", address)
 	}
 	if *clusterMemberLabel != "" && *clusterMemberNum != "" {
 		labels.Add(*clusterMemberLabel, *clusterMemberNum)
