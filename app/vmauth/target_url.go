@@ -16,22 +16,23 @@ func mergeURLs(uiURL, requestURI *url.URL, dropSrcPathPrefixParts int) *url.URL 
 	}
 	targetURL.Path += srcPath
 	defaultRequestParams := targetURL.Query()
+	requestParams := requestURI.Query()
 	// fast path
-	if len(defaultRequestParams) == 0 {
+	if len(requestParams) == 0 {
 		return &targetURL
 	}
 	// merge query parameters from requests.
-	uiParams := requestURI.Query()
-	for k, v := range defaultRequestParams {
+	for k, v := range requestParams {
 		// skip clashed query params from original request
-		if exist := uiParams.Get(k); len(exist) > 0 {
-			continue
+		if exist := defaultRequestParams.Get(k); len(exist) > 0 {
+			defaultRequestParams.Del(k)
 		}
+		// override default by request params
 		for i := range v {
-			uiParams.Add(k, v[i])
+			requestParams.Add(k, v[i])
 		}
 	}
-	targetURL.RawQuery = uiParams.Encode()
+	targetURL.RawQuery = requestParams.Encode()
 	return &targetURL
 }
 
