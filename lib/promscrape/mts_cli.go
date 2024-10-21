@@ -44,10 +44,10 @@ var (
 	ident string
 
 	// env
-	tenant      string
-	mtsUrl      string
-	addIdentTag bool
-	addUrlTag   bool
+	tenant   string
+	mtsUrl   string
+	identTag string
+	urlTag   string
 
 	// runtime vars
 	sign = &Md5Sign{Md5: "", Timestamp: 0}
@@ -79,8 +79,8 @@ func init() {
 	}
 	mtsUrl = strings.TrimSuffix(mtsUrl, "/")
 	// extra tags
-	addIdentTag = len(os.Getenv("IDENT_TAG")) > 0
-	addUrlTag = len(os.Getenv("URL_TAG")) > 0
+	identTag = strings.TrimSpace(os.Getenv("IDENT_TAG"))
+	urlTag = strings.TrimSpace(os.Getenv("URL_TAG"))
 }
 
 // MtsGetTargetsRequest MtsTargets mts heartbeat response

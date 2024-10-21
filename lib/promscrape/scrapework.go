@@ -869,7 +869,7 @@ func (sw *scrapeWork) addAutoMetrics(am *autoMetrics, wc *writeRequestCtx, times
 		sw.addAutoTimeseries(wc, "scrape_series_limit", float64(sl.MaxItems()), timestamp)
 	}
 	sw.addAutoTimeseries(wc, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
-	sw.addAutoTimeseries(wc, "up", float64(am.up), timestamp)
+	sw.addAutoTimeseries(wc, "target_up", float64(am.up), timestamp)
 }
 
 // addAutoTimeseries adds automatically generated time series with the given name, value and timestamp.
