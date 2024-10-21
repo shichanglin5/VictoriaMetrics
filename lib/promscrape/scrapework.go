@@ -2,6 +2,7 @@ package promscrape
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -470,7 +471,10 @@ func (sw *scrapeWork) processDataOneShot(scrapeTimestamp, realTimestamp int64, b
 		up = 0
 		scrapesFailed.Inc()
 	} else {
-		wc.rows.UnmarshalWithErrLogger(bodyString, sw.logError)
+		wc.rows.UnmarshalWithErrLogger(bodyString, func(s string) {
+			sw.logError(s)
+			err = errors.New(s)
+		})
 	}
 	srcRows := wc.rows.Rows
 	samplesScraped := len(srcRows)

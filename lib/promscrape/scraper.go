@@ -99,11 +99,6 @@ func WriteConfigData(w io.Writer) {
 }
 
 func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest), globalStopCh <-chan struct{}) {
-	if configFile == "" {
-		// Nothing to scrape.
-		return
-	}
-
 	metrics.RegisterSet(configMetricsSet)
 
 	// Register SIGHUP handler for config reload before loadConfig.
@@ -111,8 +106,13 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240
 	sighupCh := procutil.NewSighupChan()
 
+	mtsClient := NewMtsClient(globalStopCh)
+	err := mtsClient.StartHeartbeat()
+	if err != nil {
+		logger.Fatalf("cannot start mts heartbeat: %s", err)
+	}
 	logger.Infof("reading scrape configs from %q", configFile)
-	cfg, err := loadConfig(configFile)
+	cfg, err := mtsClient.loadConfig(configFile)
 	if err != nil {
 		logger.Fatalf("cannot read %q: %s", configFile, err)
 	}
@@ -157,7 +157,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 		select {
 		case <-sighupCh:
 			logger.Infof("SIGHUP received; reloading Prometheus configs from %q", configFile)
-			cfgNew, err := loadConfig(configFile)
+			cfgNew, err := mtsClient.loadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
@@ -165,6 +165,9 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 				goto waitForChans
 			}
 			configSuccess.Set(1)
+			if cfgNew == nil {
+				goto waitForChans
+			}
 			if !cfgNew.mustRestart(cfg) {
 				logger.Infof("nothing changed in %q", configFile)
 				goto waitForChans
@@ -175,7 +178,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 			configReloads.Inc()
 			configTimestamp.Set(fasttime.UnixTimestamp())
 		case <-tickerCh:
-			cfgNew, err := loadConfig(configFile)
+			cfgNew, err := mtsClient.loadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
@@ -183,6 +186,9 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 				goto waitForChans
 			}
 			configSuccess.Set(1)
+			if cfgNew == nil {
+				goto waitForChans
+			}
 			if !cfgNew.mustRestart(cfg) {
 				goto waitForChans
 			}

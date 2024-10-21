@@ -1210,8 +1210,15 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// Remove labels with "__" prefix according to https://www.robustperception.io/life-of-a-label/
 	labels.RemoveLabelsWithDoubleUnderscorePrefix()
 	// Add missing "instance" label according to https://www.robustperception.io/life-of-a-label
-	if labels.Get("ident") == "" {
+	if addIdentTag {
 		labels.Add("ident", address)
+	}
+	if addUrlTag {
+		parsedUrl, err := url.Parse(scrapeURL)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)
+		}
+		labels.Add("url", fmt.Sprintf("%s://%s:%s", parsedUrl.Scheme, parsedUrl.Hostname(), parsedUrl.Port()))
 	}
 	if *clusterMemberLabel != "" && *clusterMemberNum != "" {
 		labels.Add(*clusterMemberLabel, *clusterMemberNum)
