@@ -106,7 +106,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240
 	sighupCh := procutil.NewSighupChan()
 
-	mtsClient := NewMtsClient(globalStopCh)
+	mtsClient := NewMtsClient()
 	err := mtsClient.StartHeartbeat()
 	if err != nil {
 		logger.Fatalf("cannot start mts heartbeat: %s", err)

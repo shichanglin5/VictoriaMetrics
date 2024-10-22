@@ -15,8 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -93,9 +95,10 @@ type MtsGetTargetsRequest struct {
 
 // MtsHeartbeatRequest MtsHeartbeat response entity
 type MtsHeartbeatRequest struct {
-	Ident  string `json:"ident"`
-	Ts     int64  `json:"ts"`
-	Tenant string `json:"tenant"`
+	Ident    string `json:"ident"`
+	Ts       int64  `json:"ts"`
+	Tenant   string `json:"tenant"`
+	Stopping bool   `json:"stopping"`
 }
 
 type Md5Sign struct {
@@ -130,17 +133,23 @@ type TargetGroup struct {
 }
 
 type MtsClient struct {
-	httpClient   *http.Client
-	globalStopCh <-chan struct{}
+	httpClient *http.Client
+	stopCh     <-chan struct{}
+	cancelFunc context.CancelFunc
+
+	// heartbeat to mts with 'stopping' flag (set ts to -1)
+	stopping atomic.Bool
 }
 
-func NewMtsClient(globalStopCh <-chan struct{}) *MtsClient {
+func NewMtsClient() *MtsClient {
 	dialer := &net.Dialer{
 		Timeout:   3 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	return &MtsClient{
-		globalStopCh: globalStopCh,
+		stopCh:     ctx.Done(),
+		cancelFunc: cancelFunc,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext:           dialer.DialContext,
@@ -164,7 +173,6 @@ func (c *MtsClient) StartHeartbeat() error {
 	}
 	if ip == "" {
 		return errors.New("ip is empty")
-
 	}
 	ident = fmt.Sprintf("%s:%s", ip, "8429")
 
@@ -175,9 +183,28 @@ func (c *MtsClient) StartHeartbeat() error {
 	logger.Infof("mts heartbeat started.")
 	ticker := time.NewTicker(3 * time.Second)
 	go func() {
+		scraperWG.Add(1)
+		defer scraperWG.Done()
+
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+
 		for {
 			select {
-			case <-c.globalStopCh:
+			case sig := <-ch:
+				if sig == syscall.SIGHUP {
+					// Prevent from the program stop on SIGHUP
+					continue
+				}
+				logger.Infof("mts client stopping...")
+				c.stopping.Store(true)
+				_ = c.heartbeat()
+				signal.Stop(ch)
+			case <-c.stopCh:
+				logger.Infof("mts client exit gracefally")
+				return
+			case <-globalStopChan:
+				logger.Infof("mts client exit. triggerred by globalStopCh, adjust -http.shutdownDelay to bigger value to wait for mts gracefally shutdown.")
 				return
 			case <-ticker.C:
 				err = c.heartbeat()
@@ -202,7 +229,7 @@ func (c *MtsClient) getIp() (string, error) {
 }
 
 func (c *MtsClient) heartbeat() error {
-	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenant}
+	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenant, Stopping: c.stopping.Load()}
 	err := requestMts(c, apiHeartbeat, entity, func(result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
@@ -293,11 +320,21 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 
 			targetSize.Store(int64(count))
 			mtsPullTargetsSuccessMetric.Inc()
+
+			if c.stopping.Load() && len(result.Data) == 0 {
+				// trigger the heartbeat goroutine to exit
+				c.cancelFunc()
+			}
 			return nil
 		} else if mtsResult.Code == -2 {
 			mtsPullTargetsNoChangeMetric.Inc()
 			return nil
 		} else {
+			if c.stopping.Load() {
+				// exit and trigger the heartbeat goroutine to exit
+				c.cancelFunc()
+				return nil
+			}
 			// 目前 mts 当 sign 没变化时，返回 code 是 -1，所以需要根据 msg 来判断
 			if strings.Contains(mtsResult.Message, "targets和服务端一致") {
 				mtsPullTargetsNoChangeMetric.Inc()
