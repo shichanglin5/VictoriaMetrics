@@ -106,13 +106,19 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240
 	sighupCh := procutil.NewSighupChan()
 
-	mtsClient := NewMtsClient()
-	err := mtsClient.StartHeartbeat()
-	if err != nil {
-		logger.Fatalf("cannot start mts heartbeat: %s", err)
-	}
 	logger.Infof("reading scrape configs from %q", configFile)
-	cfg, err := mtsClient.loadConfig(configFile)
+	var doLoadConfig func(configFile string) (*Config, error)
+	if len(mtsUrl) > 0 {
+		mtsClient := NewMtsClient()
+		err := mtsClient.StartHeartbeat()
+		if err != nil {
+			logger.Fatalf("cannot start mts heartbeat: %s", err)
+		}
+		doLoadConfig = mtsClient.loadConfig
+	} else {
+		doLoadConfig = loadConfig
+	}
+	cfg, err := doLoadConfig(configFile)
 	if err != nil {
 		logger.Fatalf("cannot read %q: %s", configFile, err)
 	}
@@ -157,7 +163,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 		select {
 		case <-sighupCh:
 			logger.Infof("SIGHUP received; reloading Prometheus configs from %q", configFile)
-			cfgNew, err := mtsClient.loadConfig(configFile)
+			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
@@ -178,7 +184,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 			configReloads.Inc()
 			configTimestamp.Set(fasttime.UnixTimestamp())
 		case <-tickerCh:
-			cfgNew, err := mtsClient.loadConfig(configFile)
+			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
