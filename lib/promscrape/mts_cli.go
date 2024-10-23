@@ -181,7 +181,7 @@ func (c *MtsClient) StartHeartbeat() error {
 		return err
 	}
 	logger.Infof("mts heartbeat started.")
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	go func() {
 		scraperWG.Add(1)
 		defer scraperWG.Done()
