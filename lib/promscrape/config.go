@@ -828,6 +828,10 @@ func (cfg *Config) getStaticScrapeWork() []*ScrapeWork {
 }
 
 func getScrapeWorkConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConfig) (*scrapeWorkConfig, error) {
+	return getScrapeWorkConfigForMtsConfig(sc, baseDir, globalCfg)
+}
+
+func getScrapeWorkConfigForMtsConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConfig) (*scrapeWorkConfig, error) {
 	jobName := sc.JobName
 	if jobName == "" {
 		return nil, fmt.Errorf("missing `job_name` field in `scrape_config`")
@@ -1210,10 +1214,17 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// Remove labels with "__" prefix according to https://www.robustperception.io/life-of-a-label/
 	labels.RemoveLabelsWithDoubleUnderscorePrefix()
 	// Add missing "instance" label according to https://www.robustperception.io/life-of-a-label
-	if len(identTag) > 0 {
+
+	// dbproxy 不需要 ident tag
+	var tenant string
+	if at != nil {
+		tenant = AuthTokenToTenant[*at]
+	}
+	if len(identTag) > 0 && tenant != "inf-dbproxy" {
 		labels.Add(identTag, address)
 	}
-	if len(urlTag) > 0 {
+	// dbproxy 和 redisproxy 不需要 url tag
+	if len(urlTag) > 0 && tenant != "inf-dbproxy" && tenant != "inf-redisproxy" {
 		parsedUrl, err := url.Parse(scrapeURL)
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)

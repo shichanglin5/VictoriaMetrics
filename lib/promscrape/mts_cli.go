@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/netutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutils"
@@ -29,6 +30,38 @@ const (
 	jobLabel     = "job"
 )
 
+var TenantToAuthTokenStr = map[string]string{
+	"default":             "1:0",
+	"inf-esproxy":         "1:1",
+	"inf-dbproxy":         "1:2",
+	"inf-redisproxy":      "1:3",
+	"inf-pay":             "1:4",
+	"skyeye-band":         "2:0",
+	"skyeye-band-large":   "2:1",
+	"skyeye-band-uat":     "2:2",
+	"skyeye-gateway":      "2:3",
+	"skyeye-skynet":       "2:4",
+	"skyeye-tlb":          "2:5",
+	"skyeye-tlb-core":     "2:6",
+	"skyeye-tlb-core-uat": "2:7",
+	"skyeye-tlb-static":   "2:8",
+	"skyeye-tlb-uat":      "2:9",
+	"skynet-alert":        "2:10",
+	"skyeye-apm":          "3:0",
+	"skyeye-apm-uat":      "3:1",
+	"skyeye-apm-topo":     "3:2",
+}
+var TenantToAuthToken = make(map[string]*auth.Token, len(TenantToAuthTokenStr))
+var AuthTokenToTenant = make(map[auth.Token]string, len(TenantToAuthTokenStr))
+
+func newAuthToken(t string) *auth.Token {
+	token, err := auth.NewToken(t)
+	if err != nil {
+		panic(err)
+	}
+	return token
+}
+
 var (
 	// metrics
 	mtsHeartbeatFailedMetric  = metrics.NewCounter(`vmagent_mts_heartbeat_failed`)
@@ -46,13 +79,21 @@ var (
 	ident string
 
 	// env
-	tenant   string
-	mtsUrl   string
+	region   string
+	tenants  []string
+	MtsUrl   string
 	identTag string
 	urlTag   string
 
 	// runtime vars
 	sign = &Md5Sign{Md5: "", Timestamp: 0}
+)
+
+var (
+	OverrideRemoteWriteUrls    []string
+	OverrideRemoteWriteHeaders []string
+	GetAuthTokenByArgId        func(i int) string
+	GetRwctxIdByArgId          func(i int) string
 )
 
 var globalConfig = &GlobalConfig{
@@ -61,28 +102,99 @@ var globalConfig = &GlobalConfig{
 	ExternalLabels: nil,
 }
 
-var tenantMap = map[string]string{
-	"default":        "1:0",
-	"inf-esproxy":    "1:1",
-	"inf-dbproxy":    "1:2",
-	"inf-redisproxy": "1:3",
-	"inf-pay":        "1:4",
+var wxUrl = "http://hd1.infprometheus.dss.17usoft.com/write/api/v1/write"
+var thUrl = "http://hd2.infprometheus.dss.17usoft.com/write/api/v1/write"
+var regionUrls = map[string]string{
+	"wx": wxUrl,
+	"th": thUrl,
 }
 
 func init() {
-	// init env vars
-	tenant = os.Getenv("TENANT")
-	if len(tenant) == 0 {
-		panic("environment variable TENANT not set")
+	// tenants
+	regionEnv := os.Getenv("REGION")
+	if len(regionEnv) > 0 {
+		region = strings.TrimSpace(regionEnv)
+		if _, ok := regionUrls[region]; !ok {
+			panic("region must be 'wx' or 'th'")
+		}
+		logger.Infof("load region from env: %s", MtsUrl)
+	} else {
+		logger.Infof("no evn REGION set, default to multi region mode")
 	}
-	mtsUrl = os.Getenv("MTS_URL")
-	if len(mtsUrl) == 0 {
-		panic("environment variable MTS_URL not set")
+
+	// tenants
+	tenantsEnv := os.Getenv("TENANTS")
+	if len(tenantsEnv) == 0 {
+		panic("environment variable TENANTS not set")
 	}
-	mtsUrl = strings.TrimSuffix(mtsUrl, "/")
+	// 如果指定为 *，则添加所有预定于的租户
+	if tenantsEnv == "*" {
+		tenants = make([]string, 0, len(TenantToAuthTokenStr))
+		for k := range TenantToAuthTokenStr {
+			tenants = append(tenants, k)
+		}
+	} else {
+		tenantsSplit := strings.Split(tenantsEnv, ",")
+		tenants = make([]string, 0, len(tenantsSplit))
+		for _, tenant := range tenantsSplit {
+			tenants = append(tenants, strings.TrimSpace(tenant))
+		}
+	}
+	logger.Infof("load tenants(len=%d) from env: %v", len(tenants), tenants)
+
+	// mts url
+	MtsUrl = os.Getenv("MTS_URL")
+	if len(MtsUrl) > 0 {
+		MtsUrl = strings.TrimSuffix(MtsUrl, "/")
+		logger.Infof("load mts url from env: %s", MtsUrl)
+	} else {
+		logger.Infof("env MTS_URL not set")
+	}
+
 	// extra tags
 	identTag = strings.TrimSpace(os.Getenv("IDENT_TAG"))
 	urlTag = strings.TrimSpace(os.Getenv("URL_TAG"))
+
+	// generate remote write urls & headers
+	OverrideRemoteWriteHeaders = make([]string, 0, len(tenants)*2)
+	OverrideRemoteWriteUrls = make([]string, 0, len(tenants)*2)
+	for _, tenant := range tenants {
+		if len(region) > 0 {
+			GetAuthTokenByArgId = func(i int) string {
+				return TenantToAuthToken[tenants[i]].String()
+			}
+			GetRwctxIdByArgId = func(i int) string {
+				return fmt.Sprintf("%s_%s", region, tenants[i])
+			}
+			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s,", regionUrls[region]))
+			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s,", tenant))
+		} else {
+			GetAuthTokenByArgId = func(i int) string {
+				return TenantToAuthToken[tenants[i/2]].String()
+			}
+			GetRwctxIdByArgId = func(i int) string {
+				isWxRegion := i%2 == 0
+				if isWxRegion {
+					return fmt.Sprintf("%s_%s", "wx", tenants[i/2])
+				} else {
+					return fmt.Sprintf("%s_%s", "th", tenants[i/2])
+				}
+			}
+			// wx
+			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s", wxUrl))
+			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s", tenant))
+			// th
+			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s", thUrl))
+			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s", tenant))
+		}
+	}
+
+	// init auth tokens
+	for k, v := range TenantToAuthTokenStr {
+		authToken := newAuthToken(v)
+		TenantToAuthToken[k] = authToken
+		AuthTokenToTenant[*authToken] = k
+	}
 }
 
 // MtsGetTargetsRequest MtsTargets mts heartbeat response
@@ -229,7 +341,7 @@ func (c *MtsClient) getIp() (string, error) {
 }
 
 func (c *MtsClient) heartbeat() error {
-	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenant, Stopping: c.stopping.Load()}
+	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Stopping: c.stopping.Load()}
 	err := requestMts(c, apiHeartbeat, entity, func(result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
@@ -247,7 +359,7 @@ func (c *MtsClient) heartbeat() error {
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
-	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.sign(), Tenant: tenant}
+	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.sign(), Tenant: tenants[0]}
 	err := requestMts(c, apiGetTarget, req, func(mtsResult *MtsResponse[PullTargetResult]) error {
 		if mtsResult.Code == 0 {
 			// targets 发生变化，需要解析
@@ -282,7 +394,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 						labels.Add(k, v)
 					}
 					//add tenant labels
-					labels.Add("__tenant_id__", tenantMap[tenant])
+					labels.Add("__tenant_id__", TenantToAuthTokenStr[tenants[0]])
 					staticConfig := StaticConfig{
 						Targets: targetGroup.Targets,
 						Labels:  labels,
@@ -363,7 +475,7 @@ retryRequest:
 	if err != nil {
 		return fmt.Errorf("marsha json err: %w", err)
 	}
-	request, err := http.NewRequest("POST", mtsUrl+path, bytes.NewBuffer(reqBody))
+	request, err := http.NewRequest("POST", MtsUrl+path, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return err
 	}

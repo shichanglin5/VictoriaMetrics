@@ -3,6 +3,7 @@ package remotewrite
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promscrape"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -43,6 +44,7 @@ var (
 		"https://docs.victoriametrics.com/cluster-victoriametrics/#url-format . By default incoming data is processed via single-node insert handlers "+
 		"according to https://docs.victoriametrics.com/#how-to-import-time-series-data ."+
 		"See https://docs.victoriametrics.com/vmagent/#multitenancy for details")
+	tenantFastQueueIsolation = flag.Bool("tenantFastQueueIsolation", true, "whether to isolate fast queues for each tenant. ")
 
 	shardByURL = flag.Bool("remoteWrite.shardByURL", false, "Whether to shard outgoing series across all the remote storage systems enumerated via -remoteWrite.url . "+
 		"By default the data is replicated across all the -remoteWrite.url . See https://docs.victoriametrics.com/vmagent/#sharding-among-remote-storages . "+
@@ -122,6 +124,10 @@ func MultitenancyEnabled() bool {
 	return *enableMultitenantHandlers
 }
 
+func TenantFastQueueIsolationEnabled() bool {
+	return *tenantFastQueueIsolation
+}
+
 // Contains the current relabelConfigs.
 var allRelabelConfigs atomic.Pointer[relabelConfigs]
 
@@ -150,6 +156,11 @@ var (
 	shardByURLIgnoreLabelsMap map[string]struct{}
 )
 
+var (
+	overrideDefault   = false
+	autoTokenToRwctxs = make(map[string][]*remoteWriteCtx, 20)
+)
+
 // Init initializes remotewrite.
 //
 // It must be called after flag.Parse().
@@ -157,7 +168,9 @@ var (
 // Stop must be called for graceful shutdown.
 func Init() {
 	if len(*remoteWriteURLs) == 0 {
-		logger.Fatalf("at least one `-remoteWrite.url` command-line flag must be set")
+		*remoteWriteURLs = promscrape.OverrideRemoteWriteUrls
+		*headers = promscrape.OverrideRemoteWriteHeaders
+		overrideDefault = true
 	}
 	if *maxHourlySeries > 0 {
 		hourlySeriesLimiter = bloomfilter.NewLimiter(*maxHourlySeries, time.Hour)
@@ -322,9 +335,22 @@ func newRemoteWriteCtxs(at *auth.Token, urls []string) []*remoteWriteCtx {
 			sanitizedURL = fmt.Sprintf("%s:%d:%d", sanitizedURL, at.AccountID, at.ProjectID)
 		}
 		if *showRemoteWriteURL {
-			sanitizedURL = fmt.Sprintf("%d:%s", i+1, remoteWriteURL)
+			if overrideDefault {
+				sanitizedURL = fmt.Sprintf("%s", remoteWriteURL)
+			} else {
+				sanitizedURL = fmt.Sprintf("%d:%s", i+1, remoteWriteURL)
+			}
 		}
 		rwctxs[i] = newRemoteWriteCtx(i, remoteWriteURL, maxInmemoryBlocks, sanitizedURL)
+		if overrideDefault {
+			authToken := promscrape.GetAuthTokenByArgId(i)
+			if ctxs, ok := autoTokenToRwctxs[authToken]; !ok {
+				ctxs = make([]*remoteWriteCtx, 0, 2)
+				autoTokenToRwctxs[authToken] = append(ctxs, rwctxs[i])
+			} else {
+				autoTokenToRwctxs[authToken] = append(ctxs, rwctxs[i])
+			}
+		}
 	}
 	return rwctxs
 }
@@ -417,7 +443,7 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	}
 
 	var tenantRctx *relabelCtx
-	if at != nil {
+	if at != nil && MultitenancyEnabled() && !TenantFastQueueIsolationEnabled() {
 		// Convert at to (vm_account_id, vm_project_id) labels.
 		tenantRctx = getRelabelCtx()
 		defer putRelabelCtx(tenantRctx)
@@ -427,6 +453,9 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	// This allows saving CPU time spent on relabeling and block compression
 	// if some of remote storage systems cannot keep up with the data ingestion rate.
 	rwctxs, ok := getEligibleRemoteWriteCtxs(tss, forceDropSamplesOnFailure)
+	if overrideDefault {
+		rwctxs, ok = autoTokenToRwctxs[at.String()]
+	}
 	if !ok {
 		// At least a single remote write queue is blocked and dropSamplesOnFailure isn't set.
 		// Return false to the caller, so it could re-send samples again.
@@ -783,7 +812,18 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
 	pqURL.RawQuery = ""
 	pqURL.Fragment = ""
 	h := xxhash.Sum64([]byte(pqURL.String()))
-	queuePath := filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%d_%016X", argIdx+1, h))
+
+	var queuePath string
+	if overrideDefault {
+		tenant := promscrape.GetRwctxIdByArgId(argIdx)
+		if len(tenant) == 0 {
+			panic("newRemoteWriteCtx -> promscrape.GetTenantByArgId(argIdx) return empty string")
+		}
+		queuePath = filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%s_%016X", tenant, h))
+	} else {
+		queuePath = filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%d_%016X", argIdx+1, h))
+	}
+
 	maxPendingBytes := maxPendingBytesPerURL.GetOptionalArg(argIdx)
 	if maxPendingBytes != 0 && maxPendingBytes < persistentqueue.DefaultChunkFileSize {
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/4195

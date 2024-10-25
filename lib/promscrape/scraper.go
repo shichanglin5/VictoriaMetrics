@@ -62,6 +62,9 @@ func CheckConfig() error {
 //
 // Scraped data is passed to pushData.
 func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
+	if *promscrapeConfigFile == "" {
+		return
+	}
 	mustInitClusterMemberID()
 	globalStopChan = make(chan struct{})
 	scraperWG.Add(1)
@@ -73,6 +76,9 @@ func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
 
 // Stop stops Prometheus scraper.
 func Stop() {
+	if *promscrapeConfigFile == "" {
+		return
+	}
 	close(globalStopChan)
 	scraperWG.Wait()
 }
@@ -108,7 +114,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 
 	logger.Infof("reading scrape configs from %q", configFile)
 	var doLoadConfig func(configFile string) (*Config, error)
-	if len(mtsUrl) > 0 {
+	if len(MtsUrl) > 0 {
 		mtsClient := NewMtsClient()
 		err := mtsClient.StartHeartbeat()
 		if err != nil {

@@ -270,8 +270,18 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		if common.HandleVMProtoServerHandshake(w, r) {
 			return true
 		}
+		tenant := r.Header.Get("X-Scope-OrgID")
+		if len(tenant) == 0 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		}
+		authToken := promscrape.TenantToAuthToken[tenant]
+		if authToken == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		}
 		prometheusWriteRequests.Inc()
-		if err := promremotewrite.InsertHandler(nil, r); err != nil {
+		if err := promremotewrite.InsertHandler(authToken, r); err != nil {
 			prometheusWriteErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
