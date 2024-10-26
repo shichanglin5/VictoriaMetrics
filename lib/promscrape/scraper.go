@@ -62,7 +62,7 @@ func CheckConfig() error {
 //
 // Scraped data is passed to pushData.
 func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
-	if *promscrapeConfigFile == "" {
+	if noScrapeConfig() {
 		return
 	}
 	mustInitClusterMemberID()
@@ -76,11 +76,15 @@ func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
 
 // Stop stops Prometheus scraper.
 func Stop() {
-	if *promscrapeConfigFile == "" {
+	if noScrapeConfig() {
 		return
 	}
 	close(globalStopChan)
 	scraperWG.Wait()
+}
+
+func noScrapeConfig() bool {
+	return *promscrapeConfigFile == "" && len(MtsUrl) == 0
 }
 
 var (
