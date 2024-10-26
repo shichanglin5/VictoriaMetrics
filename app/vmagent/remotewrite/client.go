@@ -450,8 +450,8 @@ again:
 				"failed to read response body: %s",
 				len(block), c.sanitizedURL, statusCode, err)
 		} else {
-			remoteWriteRejectedLogger.Errorf("sending a block with size %d bytes to %q was rejected (skipping the block): status code %d; response body: %s",
-				len(block), c.sanitizedURL, statusCode, string(body))
+			remoteWriteRejectedLogger.Errorf("sending a block with size %d bytes to %q was rejected (skipping the block): request headers:%v; status code %d; response body: %s",
+				len(block), c.sanitizedURL, c.authCfg.HeadersNoAuthString(), statusCode, string(body))
 		}
 		// Just drop block on 409 and 400 status codes like Prometheus does.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/873
