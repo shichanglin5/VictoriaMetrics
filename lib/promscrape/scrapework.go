@@ -24,6 +24,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompbmarshal"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promrelabel"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutils"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	parser "github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus/stream"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/proxy"
@@ -96,7 +97,8 @@ type ScrapeWork struct {
 	// See also https://prometheus.io/docs/concepts/jobs_instances/
 	//
 	// Labels are sorted by name.
-	Labels *promutils.Labels
+	Labels         *promutils.Labels
+	AutoMetricTags []prometheus.Tag
 
 	// ExternalLabels contains labels from global->external_labels section of -promscrape.config
 	//
@@ -877,7 +879,7 @@ func (sw *scrapeWork) addAutoMetrics(am *autoMetrics, wc *writeRequestCtx, times
 // See https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series
 func (sw *scrapeWork) addAutoTimeseries(wc *writeRequestCtx, name string, value float64, timestamp int64) {
 	sw.tmpRow.Metric = name
-	sw.tmpRow.Tags = nil
+	sw.tmpRow.Tags = sw.Config.AutoMetricTags
 	sw.tmpRow.Value = value
 	sw.tmpRow.Timestamp = timestamp
 	sw.addRowToTimeseries(wc, &sw.tmpRow, timestamp, false)

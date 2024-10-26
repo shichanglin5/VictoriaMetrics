@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -1223,13 +1224,16 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	if len(identTag) > 0 && tenant != "inf-dbproxy" {
 		labels.Add(identTag, address)
 	}
-	// dbproxy 和 redisproxy 不需要 url tag
-	if len(urlTag) > 0 && tenant != "inf-dbproxy" && tenant != "inf-redisproxy" {
-		parsedUrl, err := url.Parse(scrapeURL)
-		if err != nil {
-			return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)
-		}
-		labels.Add(urlTag, fmt.Sprintf("%s://%s:%s", parsedUrl.Scheme, parsedUrl.Hostname(), parsedUrl.Port()))
+	// autoMetrics 比如 target_up 等添加额外的 url 标签
+	parsedUrl, err := url.Parse(scrapeURL)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)
+	}
+	autoMetricsTags := []prometheus.Tag{
+		{
+			Key:   "url",
+			Value: fmt.Sprintf("%s://%s:%s", parsedUrl.Scheme, parsedUrl.Hostname(), parsedUrl.Port()),
+		},
 	}
 	if *clusterMemberLabel != "" && *clusterMemberNum != "" {
 		labels.Add(*clusterMemberLabel, *clusterMemberNum)
@@ -1254,6 +1258,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 		DenyRedirects:        swc.denyRedirects,
 		OriginalLabels:       originalLabels,
 		Labels:               labelsCopy,
+		AutoMetricTags:       autoMetricsTags,
 		ExternalLabels:       swc.externalLabels,
 		ProxyURL:             swc.proxyURL,
 		ProxyAuthConfig:      swc.proxyAuthConfig,
