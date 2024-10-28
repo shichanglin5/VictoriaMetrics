@@ -166,8 +166,8 @@ func init() {
 			GetRwctxIdByArgId = func(i int) string {
 				return fmt.Sprintf("%s_%s", region, tenants[i])
 			}
-			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s,", regionUrls[region]))
-			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s,", tenant))
+			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s", regionUrls[region]))
+			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s", tenant))
 		} else {
 			GetAuthTokenByArgId = func(i int) string {
 				return TenantToAuthToken[tenants[i/2]].String()
