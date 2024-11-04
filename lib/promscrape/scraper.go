@@ -130,7 +130,32 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 	}
 	cfg, err := doLoadConfig(configFile)
 	if err != nil {
-		logger.Fatalf("cannot read %q: %s", configFile, err)
+		if !IsScrapeInitErr(err) {
+			logger.Fatalf("load config failed: %v", err)
+		}
+		ticker := time.NewTicker(2 * time.Second)
+		// mts 配置加载可能需要等待 scrap group 初始化
+		for _ = range 5 {
+			logger.Warnf("mts pull targets retry: %v", err)
+			select {
+			case <-globalStopChan:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				cfg, err = doLoadConfig(configFile)
+				if IsScrapeInitErr(err) {
+					continue
+				}
+			}
+			if err == nil {
+				logger.Infof("mts pull targets success")
+				break
+			}
+		}
+		ticker.Stop()
+		if err != nil {
+			logger.Fatalf("mts pull targets retry failed: %s", err)
+		}
 	}
 	marshaledData := cfg.marshal()
 	configData.Store(&marshaledData)

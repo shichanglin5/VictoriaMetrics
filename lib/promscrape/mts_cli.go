@@ -117,7 +117,7 @@ func init() {
 		if _, ok := regionUrls[region]; !ok {
 			panic("region must be 'wx' or 'th'")
 		}
-		logger.Infof("load region from env: %s", MtsUrl)
+		logger.Infof("load region from env: %s", region)
 	} else {
 		logger.Infof("no evn REGION set, default to multi region mode")
 	}
@@ -298,12 +298,12 @@ func (c *MtsClient) StartHeartbeat() error {
 		scraperWG.Add(1)
 		defer scraperWG.Done()
 
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 		for {
 			select {
-			case sig := <-ch:
+			case sig := <-signals:
 				if sig == syscall.SIGHUP {
 					// Prevent from the program stop on SIGHUP
 					continue
@@ -311,7 +311,13 @@ func (c *MtsClient) StartHeartbeat() error {
 				logger.Infof("mts client stopping...")
 				c.stopping.Store(true)
 				_ = c.heartbeat()
-				signal.Stop(ch)
+				signal.Stop(signals)
+				//
+				go func() {
+					logger.Infof("mts client will exit after waiting for 10 seconds")
+					time.Sleep(10 * time.Second)
+					c.cancelFunc()
+				}()
 			case <-c.stopCh:
 				logger.Infof("mts client exit gracefally")
 				return
@@ -352,27 +358,35 @@ func (c *MtsClient) heartbeat() error {
 	})
 	if err != nil {
 		mtsHeartbeatFailedMetric.Inc()
+		return fmt.Errorf("mts heartbeat: %s", err)
 	}
 	return err
 }
+
+func IsScrapeInitErr(err error) bool {
+	return err != nil && errors.Is(err, errGroupNotInitialized)
+}
+
+var errGroupNotInitialized error = errors.New("mts scrape group not initialized")
 
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
 	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.sign(), Tenant: tenants[0]}
 	err := requestMts(c, apiGetTarget, req, func(mtsResult *MtsResponse[PullTargetResult]) error {
-		if mtsResult.Code == 0 {
+		switch mtsResult.Code {
+		case 0:
 			// targets 发生变化，需要解析
 			result := mtsResult.Result
 			// 获取sign判断，获取md5、timestamp
 			signArray := strings.Split(result.Sign, "@")
 			if len(signArray) != 2 {
-				return fmt.Errorf("sign format err: len(signArr)!=2: result.sign: %s", result.Sign)
+				return fmt.Errorf("mts sign format err: len(signArr)!=2: result.sign: %s", result.Sign)
 			}
 			remoteMd5 := signArray[1]
 			remoteTimestamp, err := strconv.ParseInt(signArray[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("parse sign.ts(%s) err: %v", result.Sign, err)
+				return fmt.Errorf("mts parse sign.ts(%s) err: %v", result.Sign, err)
 			}
 			if remoteMd5 == sign.Md5 {
 				if sign.Timestamp < remoteTimestamp {
@@ -408,7 +422,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 						}
 						sws, err := getScrapeWorkConfig(jobScrapConfig, "", globalConfig)
 						if err != nil {
-							logger.Warnf("getScrapeWorkConfig for %s: ", jobName, err)
+							logger.Warnf("getScrapeWorkConfig for %s: %v", jobName, err)
 							continue
 						}
 						jobScrapConfig.swc = sws
@@ -438,26 +452,18 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 				c.cancelFunc()
 			}
 			return nil
-		} else if mtsResult.Code == -2 {
+		case 2:
 			mtsPullTargetsNoChangeMetric.Inc()
 			return nil
-		} else {
-			if c.stopping.Load() {
-				// exit and trigger the heartbeat goroutine to exit
-				c.cancelFunc()
-				return nil
-			}
-			// 目前 mts 当 sign 没变化时，返回 code 是 -1，所以需要根据 msg 来判断
-			if strings.Contains(mtsResult.Message, "targets和服务端一致") {
-				mtsPullTargetsNoChangeMetric.Inc()
-				return nil
-			}
+		case 3:
+			return errGroupNotInitialized
+		default:
 			return errors.New(mtsResult.Message)
 		}
 	})
 	if err != nil {
 		mtsPullTargetsFailedMetric.Inc()
-		logger.Warnf("mts pull targets err: %s", err)
+		return nil, err
 	}
 	return cfg, err
 }
@@ -496,10 +502,10 @@ retryRequest:
 	}
 	if resp.StatusCode != 200 {
 		if resp.StatusCode/100 == 5 {
-			err = fmt.Errorf("request mts statusCode=%v", resp.StatusCode)
+			err = fmt.Errorf("resp statusCode=%v", resp.StatusCode)
 			goto retryRequest
 		}
-		return fmt.Errorf("request mts statusCode=%v", resp.StatusCode)
+		return fmt.Errorf("resp statusCode=%v", resp.StatusCode)
 	}
 	respData, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -511,7 +517,7 @@ retryRequest:
 	result := &MtsResponse[Z]{}
 	err = json.Unmarshal(respData, result)
 	if err != nil {
-		return err
+		return fmt.Errorf("unmarshal json err: %w", err)
 	}
 	return handler(result)
 }

@@ -1225,14 +1225,14 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 		labels.Add(identTag, address)
 	}
 	// autoMetrics 比如 target_up 等添加额外的 url 标签
-	parsedUrl, err := url.Parse(scrapeURL)
+	_, err := url.Parse(scrapeURL)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)
 	}
 	autoMetricsTags := []prometheus.Tag{
 		{
 			Key:   "url",
-			Value: fmt.Sprintf("%s://%s:%s", parsedUrl.Scheme, parsedUrl.Hostname(), parsedUrl.Port()),
+			Value: scrapeURL,
 		},
 	}
 	if *clusterMemberLabel != "" && *clusterMemberNum != "" {
