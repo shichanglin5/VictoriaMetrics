@@ -11,6 +11,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/netutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutils"
 	"github.com/VictoriaMetrics/metrics"
+	"github.com/prometheus/common/model"
 	"go.uber.org/atomic"
 	"io"
 	"net"
@@ -238,10 +239,19 @@ type PullTargetResult struct {
 	Sign string        `json:"sign"`
 }
 
+// MtsScrapeConfig 采集配置
+type MtsScrapeConfig struct {
+	ScrapeIdc      string         `json:"scrapeIdc,omitempty"`
+	ScrapeTimeout  model.Duration `json:"scrapeTimeout,omitempty"`
+	ScrapeInterval model.Duration `json:"scrapeInterval,omitempty"`
+	MaxScrapeSize  string         `json:"maxScrapeSize,omitempty"`
+}
+
 // TargetGroup 目标targets
 type TargetGroup struct {
-	Targets []string          `json:"targets"`
-	Labels  map[string]string `json:"labels"`
+	Targets      []string          `json:"targets"`
+	Labels       map[string]string `json:"labels"`
+	ScrapeConfig *MtsScrapeConfig  `json:"scrapeConfig,omitempty"`
 }
 
 type MtsClient struct {
@@ -419,6 +429,11 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 							StaticConfigs: []StaticConfig{
 								staticConfig,
 							},
+						}
+						if targetGroup.ScrapeConfig != nil {
+							jobScrapConfig.ScrapeTimeout = promutils.NewDuration(time.Duration(targetGroup.ScrapeConfig.ScrapeTimeout))
+							jobScrapConfig.ScrapeInterval = promutils.NewDuration(time.Duration(targetGroup.ScrapeConfig.ScrapeInterval))
+							jobScrapConfig.MaxScrapeSize = targetGroup.ScrapeConfig.MaxScrapeSize
 						}
 						sws, err := getScrapeWorkConfig(jobScrapConfig, "", globalConfig)
 						if err != nil {
