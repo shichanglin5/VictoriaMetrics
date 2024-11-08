@@ -87,7 +87,7 @@ var (
 	urlTag   string
 
 	// runtime vars
-	sign = &Md5Sign{Md5: "", Timestamp: 0}
+	sign = &Md5Digest{Md5: "", Timestamp: 0}
 )
 
 var (
@@ -214,12 +214,12 @@ type MtsHeartbeatRequest struct {
 	Stopping bool   `json:"stopping"`
 }
 
-type Md5Sign struct {
+type Md5Digest struct {
 	Timestamp int64  `json:"timestamp"`
 	Md5       string `json:"md5"`
 }
 
-func (sign *Md5Sign) sign() string {
+func (sign *Md5Digest) signature() string {
 	if sign.Md5 != "" {
 		return strconv.FormatInt(sign.Timestamp, 10) + "@" + sign.Md5
 	}
@@ -382,7 +382,7 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
-	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.sign(), Tenant: tenants[0]}
+	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: tenants[0]}
 	err := requestMts(c, apiGetTarget, req, func(mtsResult *MtsResponse[PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
@@ -466,6 +466,8 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 				// trigger the heartbeat goroutine to exit
 				c.cancelFunc()
 			}
+			sign.Md5 = remoteMd5
+			sign.Timestamp = remoteTimestamp
 			return nil
 		case 2:
 			mtsPullTargetsNoChangeMetric.Inc()
