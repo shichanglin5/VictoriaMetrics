@@ -80,11 +80,12 @@ var (
 	ident string
 
 	// env
-	region   string
-	tenants  []string
-	MtsUrl   string
-	identTag string
-	urlTag   string
+	region      string
+	tenants     []string
+	scrapeGroup string
+	MtsUrl      string
+	identTag    string
+	urlTag      string
 
 	// runtime vars
 	sign = &Md5Digest{Md5: "", Timestamp: 0}
@@ -142,6 +143,15 @@ func init() {
 		}
 	}
 	logger.Infof("load tenants(len=%d) from env: %v", len(tenants), tenants)
+
+	// scrape group
+	scrapeGroup = os.Getenv("SCRAPE_GROUP")
+	if len(scrapeGroup) > 0 {
+		scrapeGroup = strings.TrimSpace(scrapeGroup)
+		logger.Infof("load mts scrape group from env: %s", MtsUrl)
+	} else {
+		logger.Infof("env SCRAPE_GROUP not set")
+	}
 
 	// mts url
 	MtsUrl = os.Getenv("MTS_URL")
@@ -204,6 +214,7 @@ type MtsGetTargetsRequest struct {
 	Ts     int64  `json:"ts"`
 	Sign   string `json:"sign"`
 	Tenant string `json:"tenant"`
+	Group  string `json:"group"`
 }
 
 // MtsHeartbeatRequest MtsHeartbeat response entity
@@ -211,6 +222,7 @@ type MtsHeartbeatRequest struct {
 	Ident    string `json:"ident"`
 	Ts       int64  `json:"ts"`
 	Tenant   string `json:"tenant"`
+	Group    string `json:"group"`
 	Stopping bool   `json:"stopping"`
 }
 
@@ -357,7 +369,7 @@ func (c *MtsClient) getIp() (string, error) {
 }
 
 func (c *MtsClient) heartbeat() error {
-	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Stopping: c.stopping.Load()}
+	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
 	err := requestMts(c, apiHeartbeat, entity, func(result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
@@ -382,7 +394,7 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
-	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: tenants[0]}
+	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: tenants[0], Group: scrapeGroup}
 	err := requestMts(c, apiGetTarget, req, func(mtsResult *MtsResponse[PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
