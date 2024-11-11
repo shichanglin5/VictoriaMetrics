@@ -78,6 +78,7 @@ var (
 
 	// init from ip addr
 	ident string
+	addr  string
 
 	// env
 	region      string
@@ -112,6 +113,11 @@ var regionUrls = map[string]string{
 }
 
 func init() {
+	var err error
+	ident, err = os.Hostname()
+	if err != nil {
+		logger.Fatalf("get hostname err: %v", err)
+	}
 	// tenants
 	regionEnv := os.Getenv("REGION")
 	if len(regionEnv) > 0 {
@@ -220,6 +226,7 @@ type MtsGetTargetsRequest struct {
 // MtsHeartbeatRequest MtsHeartbeat response entity
 type MtsHeartbeatRequest struct {
 	Ident    string `json:"ident"`
+	Addr     string `json:"addr"`
 	Ts       int64  `json:"ts"`
 	Tenant   string `json:"tenant"`
 	Group    string `json:"group"`
@@ -308,7 +315,7 @@ func (c *MtsClient) StartHeartbeat() error {
 	if ip == "" {
 		return errors.New("ip is empty")
 	}
-	ident = fmt.Sprintf("%s:%s", ip, "8429")
+	addr = fmt.Sprintf("%s:%s", ip, "8429")
 
 	err = c.heartbeat()
 	if err != nil {
@@ -369,7 +376,7 @@ func (c *MtsClient) getIp() (string, error) {
 }
 
 func (c *MtsClient) heartbeat() error {
-	entity := MtsHeartbeatRequest{Ident: ident, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
+	entity := MtsHeartbeatRequest{Ident: ident, Addr: addr, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
 	err := requestMts(c, apiHeartbeat, entity, func(result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
