@@ -43,7 +43,10 @@ func Init() {
 		logger.Fatalf("cannot determine hostname: %s", err)
 	}
 	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("node=\"%s\"", hostname))
-
+	idc := os.Getenv("IDC")
+	if idc != "" {
+		*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("idc=\"%s\"", idc))
+	}
 	extraLabels := strings.Join(*pushExtraLabel, ",")
 	// 添加 hostname 标签
 	for _, pu := range *pushURL {

@@ -20,7 +20,7 @@ FROM docker.17usoft.com/lhhdz/alpine:3.20.2
 ARG APP_NAME
 EXPOSE 8429
 ENV GOMEMLIMIT=6GiB
-ENV REGION='' MTS_URL='' TENANTS='*'
+ENV REGION='' MTS_URL='' TENANTS='*' IDC='hb1'
 ENTRYPOINT ["/vmagent", \
     "-enableMultitenantHandlers=false", \
     "-http.shutdownDelay=45s", \
@@ -32,6 +32,9 @@ ENTRYPOINT ["/vmagent", \
     "-promscrape.suppressScrapeErrorsDelay=30m", \
     "-remoteWrite.forceVMProto=true", \
     "-remoteWrite.maxDiskUsagePerURL='50737418240'", \
+    "-pushmetrics.url='http://127.0.0.1:8429/api/v1/import/prometheus'", \
+    "-pushmetrics.header='X-Scope-OrgID:meta'", \
+    "-pushmetrics.interval=5s", \
     "-remoteWrite.showURL=true" \
     ]
 COPY --from=builder /wd/bin/$APP_NAME /$APP_NAME
