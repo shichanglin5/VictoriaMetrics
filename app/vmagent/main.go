@@ -245,8 +245,12 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 
 	path := strings.Replace(r.URL.Path, "//", "/", -1)
 	if strings.HasPrefix(path, "/prometheus/api/v1/import/prometheus") || strings.HasPrefix(path, "/api/v1/import/prometheus") {
+		authToken := getAuthToken(w, r)
+		if authToken == nil {
+			return true
+		}
 		prometheusimportRequests.Inc()
-		if err := prometheusimport.InsertHandler(nil, r); err != nil {
+		if err := prometheusimport.InsertHandler(authToken, r); err != nil {
 			prometheusimportErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -271,14 +275,8 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		if common.HandleVMProtoServerHandshake(w, r) {
 			return true
 		}
-		tenant := r.Header.Get("X-Scope-OrgID")
-		if len(tenant) == 0 {
-			w.WriteHeader(http.StatusUnauthorized)
-			return true
-		}
-		authToken := promscrape.TenantToAuthToken[tenant]
+		authToken := getAuthToken(w, r)
 		if authToken == nil {
-			w.WriteHeader(http.StatusUnauthorized)
 			return true
 		}
 		prometheusWriteRequests.Inc()
@@ -505,6 +503,20 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return false
 	}
+}
+
+func getAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
+	tenant := r.Header.Get("X-Scope-OrgID")
+	if len(tenant) == 0 {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	}
+	authToken := promscrape.TenantToAuthToken[tenant]
+	if authToken == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	}
+	return authToken
 }
 
 func processMultitenantRequest(w http.ResponseWriter, r *http.Request, path string) bool {
