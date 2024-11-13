@@ -43,14 +43,28 @@ func Init() {
 	if err != nil {
 		logger.Fatalf("cannot determine hostname: %s", err)
 	}
-	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("node=\"%s\"", hostname))
-	idc := os.Getenv("IDC")
-	if idc != "" {
-		*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("idc=\"%s\"", idc))
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("instance=\"%s\"", hostname))
+
+	// scrape-{idc}-{tenant} 模式添加 job 标签
+	var jobName string
+	if len(promscrape.MtsUrl) > 0 {
+		idc := os.Getenv("IDC")
+		if idc != "" {
+			jobName = fmt.Sprintf("scrape-%s-%s", idc, promscrape.Tenants[0])
+		} else {
+			jobName = fmt.Sprintf("scrape-%s", promscrape.Tenants[0])
+		}
+	} else {
+		idc := os.Getenv("IDC")
+		if idc != "" {
+			jobName = fmt.Sprintf("pushgateway-%s", idc)
+		} else {
+			jobName = "pushgateway"
+		}
 	}
-	if len(promscrape.Tenants) == 1 {
-		*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("tenant=\"%s\"", promscrape.Tenants[0]))
-	}
+
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("job=\"%s\"", jobName))
+
 	extraLabels := strings.Join(*pushExtraLabel, ",")
 	// 添加 hostname 标签
 	for _, pu := range *pushURL {
