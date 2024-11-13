@@ -87,7 +87,7 @@ var (
 
 	// env
 	region      string
-	tenants     []string
+	Tenants     []string
 	scrapeGroup string
 	MtsUrl      string
 	identTag    string
@@ -153,18 +153,18 @@ func init() {
 	}
 	// 如果指定为 *，则添加所有预定于的租户
 	if tenantsEnv == "*" {
-		tenants = make([]string, 0, len(TenantToAuthTokenStr))
+		Tenants = make([]string, 0, len(TenantToAuthTokenStr))
 		for k := range TenantToAuthTokenStr {
-			tenants = append(tenants, k)
+			Tenants = append(Tenants, k)
 		}
 	} else {
 		tenantsSplit := strings.Split(tenantsEnv, ",")
-		tenants = make([]string, 0, len(tenantsSplit))
+		Tenants = make([]string, 0, len(tenantsSplit))
 		for _, tenant := range tenantsSplit {
-			tenants = append(tenants, strings.TrimSpace(tenant))
+			Tenants = append(Tenants, strings.TrimSpace(tenant))
 		}
 	}
-	logger.Infof("load tenants(len=%d) from env: %v", len(tenants), tenants)
+	logger.Infof("load tenants(len=%d) from env: %v", len(Tenants), Tenants)
 
 	// scrape group
 	scrapeGroup = os.Getenv("SCRAPE_GROUP")
@@ -189,28 +189,28 @@ func init() {
 	urlTag = strings.TrimSpace(os.Getenv("URL_TAG"))
 
 	// generate remote write urls & headers
-	OverrideRemoteWriteHeaders = make([]string, 0, len(tenants)*2)
-	OverrideRemoteWriteUrls = make([]string, 0, len(tenants)*2)
-	for _, tenant := range tenants {
+	OverrideRemoteWriteHeaders = make([]string, 0, len(Tenants)*2)
+	OverrideRemoteWriteUrls = make([]string, 0, len(Tenants)*2)
+	for _, tenant := range Tenants {
 		if len(region) > 0 {
 			GetAuthTokenByArgId = func(i int) string {
-				return TenantToAuthToken[tenants[i]].String()
+				return TenantToAuthToken[Tenants[i]].String()
 			}
 			GetRwctxIdByArgId = func(i int) string {
-				return fmt.Sprintf("%s_%s", region, tenants[i])
+				return fmt.Sprintf("%s_%s", region, Tenants[i])
 			}
 			OverrideRemoteWriteUrls = append(OverrideRemoteWriteUrls, fmt.Sprintf("%s", regionUrls[region]))
 			OverrideRemoteWriteHeaders = append(OverrideRemoteWriteHeaders, fmt.Sprintf("X-Scope-OrgID:%s", tenant))
 		} else {
 			GetAuthTokenByArgId = func(i int) string {
-				return TenantToAuthToken[tenants[i/2]].String()
+				return TenantToAuthToken[Tenants[i/2]].String()
 			}
 			GetRwctxIdByArgId = func(i int) string {
 				isWxRegion := i%2 == 0
 				if isWxRegion {
-					return fmt.Sprintf("%s_%s", "wx", tenants[i/2])
+					return fmt.Sprintf("%s_%s", "wx", Tenants[i/2])
 				} else {
-					return fmt.Sprintf("%s_%s", "th", tenants[i/2])
+					return fmt.Sprintf("%s_%s", "th", Tenants[i/2])
 				}
 			}
 			// wx
@@ -392,7 +392,7 @@ func (c *MtsClient) getIp() (string, error) {
 }
 
 func (c *MtsClient) heartbeat() error {
-	entity := MtsHeartbeatRequest{Ident: ident, Addr: addr, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
+	entity := MtsHeartbeatRequest{Ident: ident, Addr: addr, Ts: time.Now().UnixMilli(), Tenant: Tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
 	err := requestMts(c, apiHeartbeat, entity, func(_ *[]byte, result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
@@ -417,7 +417,7 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
-	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: tenants[0], Group: scrapeGroup}
+	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: Tenants[0], Group: scrapeGroup}
 	err := requestMts(c, apiGetTarget, req, func(respData *[]byte, mtsResult *MtsResponse[PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
@@ -445,7 +445,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 						labels.Add(k, v)
 					}
 					//add tenant labels
-					labels.Add("__tenant_id__", TenantToAuthTokenStr[tenants[0]])
+					labels.Add("__tenant_id__", TenantToAuthTokenStr[Tenants[0]])
 					staticConfig := StaticConfig{
 						Targets: targetGroup.Targets,
 						Labels:  labels,

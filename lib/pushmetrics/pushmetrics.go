@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promscrape"
 	"os"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ func Init() {
 	idc := os.Getenv("IDC")
 	if idc != "" {
 		*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("idc=\"%s\"", idc))
+	}
+	if len(promscrape.Tenants) == 1 {
+		*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("tenant=\"%s\"", promscrape.Tenants[0]))
 	}
 	extraLabels := strings.Join(*pushExtraLabel, ",")
 	// 添加 hostname 标签
