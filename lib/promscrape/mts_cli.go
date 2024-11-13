@@ -54,6 +54,7 @@ var TenantToAuthTokenStr = map[string]string{
 }
 var TenantToAuthToken = make(map[string]*auth.Token, len(TenantToAuthTokenStr))
 var AuthTokenToTenant = make(map[auth.Token]string, len(TenantToAuthTokenStr))
+var MtsPullTargetsUpdateTs atomic.Int64
 
 func newAuthToken(t string) *auth.Token {
 	token, err := auth.NewToken(t)
@@ -70,9 +71,12 @@ var (
 
 	mtsPullTargetsNoChangeMetric = metrics.NewCounter(`vmagent_mts_pull_targets_counter_nochange`)
 	mtsPullTargetsSuccessMetric  = metrics.NewCounter(`vmagent_mts_pull_targets_counter_success`)
-	mtsPullTargetsFailedMetric   = metrics.NewCounter(`vmagent_mts_pull_targets_counter_failed`)
-	targetSize                   atomic.Int64
-	_                            = metrics.NewGauge(`vmagent_mts_pull_targets_size`, func() float64 {
+	mtsPullTargetsUpdateTs       = metrics.NewGauge(`vmagent_mts_pull_targets_update_seconds`, func() float64 {
+		return float64(MtsPullTargetsUpdateTs.Load())
+	})
+	mtsPullTargetsFailedMetric = metrics.NewCounter(`vmagent_mts_pull_targets_counter_failed`)
+	targetSize                 atomic.Int64
+	_                          = metrics.NewGauge(`vmagent_mts_pull_targets_size`, func() float64 {
 		return float64(targetSize.Load())
 	})
 
@@ -110,6 +114,17 @@ var thUrl = "http://hd2.infprometheus.dss.17usoft.com/write/api/v1/write"
 var regionUrls = map[string]string{
 	"wx": wxUrl,
 	"th": thUrl,
+}
+
+var mtsConfigData atomic.Pointer[[]byte]
+
+func WriteMtsConfigData(w io.Writer) {
+	p := mtsConfigData.Load()
+	if p == nil {
+		// Nothing to write to w
+		return
+	}
+	_, _ = w.Write(*p)
 }
 
 func init() {
@@ -366,7 +381,7 @@ func (c *MtsClient) StartHeartbeat() error {
 
 func (c *MtsClient) getIp() (string, error) {
 	ip := ""
-	err := requestMts(c, apiIp, struct{}{}, func(resp *MtsResponse[string]) error {
+	err := requestMts(c, apiIp, struct{}{}, func(_ *[]byte, resp *MtsResponse[string]) error {
 		if resp.Code == 0 {
 			ip = resp.Result
 		}
@@ -377,7 +392,7 @@ func (c *MtsClient) getIp() (string, error) {
 
 func (c *MtsClient) heartbeat() error {
 	entity := MtsHeartbeatRequest{Ident: ident, Addr: addr, Ts: time.Now().UnixMilli(), Tenant: tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
-	err := requestMts(c, apiHeartbeat, entity, func(result *MtsResponse[string]) error {
+	err := requestMts(c, apiHeartbeat, entity, func(_ *[]byte, result *MtsResponse[string]) error {
 		if result.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
 			return nil
@@ -402,7 +417,7 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
 	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: tenants[0], Group: scrapeGroup}
-	err := requestMts(c, apiGetTarget, req, func(mtsResult *MtsResponse[PullTargetResult]) error {
+	err := requestMts(c, apiGetTarget, req, func(respData *[]byte, mtsResult *MtsResponse[PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
 			// targets 发生变化，需要解析
@@ -417,14 +432,6 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 			if err != nil {
 				return fmt.Errorf("mts parse sign.ts(%s) err: %v", result.Sign, err)
 			}
-			if remoteMd5 == sign.Md5 {
-				if sign.Timestamp < remoteTimestamp {
-					sign.Timestamp = remoteTimestamp
-				}
-				mtsPullTargetsNoChangeMetric.Inc()
-				return nil
-			}
-
 			// parse scrape configs
 			jobScrapConfigs := make(map[string]*ScrapeConfig, 100)
 			count := 0
@@ -468,19 +475,20 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 			}
 
 			// build vm agent config
-			scrapeConfigs := make([]*ScrapeConfig, 0, len(jobScrapConfigs))
+			configs := make([]*ScrapeConfig, 0, len(jobScrapConfigs))
 			for _, jobScrapConfig := range jobScrapConfigs {
-				scrapeConfigs = append(scrapeConfigs, jobScrapConfig)
+				configs = append(configs, jobScrapConfig)
 			}
 
 			cfg = &Config{
 				Global:        *globalConfig,
-				ScrapeConfigs: scrapeConfigs,
+				ScrapeConfigs: configs,
 			}
 
 			targetSize.Store(int64(count))
 			mtsPullTargetsSuccessMetric.Inc()
-
+			mtsConfigData.Store(respData)
+			MtsPullTargetsUpdateTs.Store(time.Now().Unix())
 			if c.stopping.Load() && len(result.Data) == 0 {
 				// trigger the heartbeat goroutine to exit
 				c.cancelFunc()
@@ -504,7 +512,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	return cfg, err
 }
 
-func requestMts[T any, Z any](c *MtsClient, path string, req T, handler func(result *MtsResponse[Z]) error) error {
+func requestMts[T any, Z any](c *MtsClient, path string, req T, handler func(respData *[]byte, result *MtsResponse[Z]) error) error {
 	retryCount := 0
 	var err error
 retryRequest:
@@ -555,5 +563,5 @@ retryRequest:
 	if err != nil {
 		return fmt.Errorf("unmarshal json err: %w", err)
 	}
-	return handler(result)
+	return handler(&respData, result)
 }

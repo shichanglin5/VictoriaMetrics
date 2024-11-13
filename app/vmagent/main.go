@@ -235,6 +235,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 			{"metric-relabel-debug", "debug metric relabeling"},
 			{"api/v1/targets", "advanced information about discovered targets in JSON format"},
 			{"config", "-promscrape.config contents"},
+			{"mtsConfig", "mts config contents"},
 			{"metrics", "available service metrics"},
 			{"flags", "command-line flags"},
 			{"-/reload", "reload configuration"},
@@ -456,6 +457,14 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		promscrapeConfigRequests.Inc()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		promscrape.WriteConfigData(w)
+		return true
+	case "/mtsConfig":
+		if !httpserver.CheckAuthFlag(w, r, configAuthKey) {
+			return true
+		}
+		promscrapeConfigRequests.Inc()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		promscrape.WriteMtsConfigData(w)
 		return true
 	case "/prometheus/api/v1/status/config", "/api/v1/status/config":
 		// See https://prometheus.io/docs/prometheus/latest/querying/api/#config
