@@ -32,6 +32,7 @@ const (
 )
 
 var TenantToAuthTokenStr = map[string]string{
+	"meta":                "0:0",
 	"default":             "1:0",
 	"inf-esproxy":         "1:1",
 	"inf-dbproxy":         "1:2",
