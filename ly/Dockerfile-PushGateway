@@ -1,0 +1,37 @@
+ARG APP_NAME=vmagent
+FROM docker.17usoft.com/lhhdz/golang-image-builder AS builder
+ARG APP_NAME
+WORKDIR /wd
+ENV GOPROXY=https://goproxy.cn,https://goproxy.io,https://mirrors.aliyun.com/goproxy/,https://athens.azurefd.net,direct \
+    GONOPROXY=git.17usoft.com \
+    GOPRIVATE=git.17usoft.com \
+    GO111MODULE=on \
+    CC=/opt/cross-builder/x86_64-linux-musl-cross/bin/x86_64-linux-musl-gcc
+COPY . .
+RUN DATEINFO_TAG=$(date -u +'%Y%m%d-%H%M%S') && \
+    PKG_PREFIX="github.com/VictoriaMetrics/VictoriaMetrics" && \
+    GO_BUILDINFO="-X '${PKG_PREFIX}/lib/buildinfo.Version=${APP_NAME}-${DATEINFO_TAG}'" && \
+    CGO_ENABLED=1 go build -trimpath -buildvcs=false \
+    		-ldflags "-extldflags '-static' ${GO_BUILDINFO}" \
+    		-tags 'netgo osusergo nethttpomithttp2 musl' \
+    		-o bin/${APP_NAME} ${PKG_PREFIX}/app/${APP_NAME}
+
+FROM docker.17usoft.com/lhhdz/alpine:3.20.2
+ARG APP_NAME
+EXPOSE 8429
+ENV GOMEMLIMIT=6GiB
+ENV REGION='' MTS_URL='' TENANTS='*'
+ENTRYPOINT ["/vmagent", \
+    "-enableMultitenantHandlers=false", \
+    "-http.shutdownDelay=45s", \
+    "-promscrape.cluster.name=write-1", \
+    "-promscrape.configCheckInterval=3s", \
+    "-promscrape.dropOriginalLabels=true", \
+    "-promscrape.maxScrapeSize=20000000", \
+    "-promscrape.streamParse=true", \
+    "-promscrape.suppressScrapeErrorsDelay=30m", \
+    "-remoteWrite.forceVMProto=true", \
+    "-remoteWrite.maxDiskUsagePerURL='50737418240'", \
+    "-remoteWrite.showURL=true" \
+    ]
+COPY --from=builder /wd/bin/$APP_NAME /$APP_NAME
