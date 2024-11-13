@@ -3,6 +3,8 @@ package pushmetrics
 import (
 	"context"
 	"flag"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +38,14 @@ var (
 
 // Init must be called after logger.Init
 func Init() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Fatalf("cannot determine hostname: %s", err)
+	}
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("node=\"%s\"", hostname))
+
 	extraLabels := strings.Join(*pushExtraLabel, ",")
+	// 添加 hostname 标签
 	for _, pu := range *pushURL {
 		opts := &metrics.PushOptions{
 			ExtraLabels:        extraLabels,
