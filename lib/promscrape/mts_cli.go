@@ -381,7 +381,11 @@ func (c *MtsClient) StartHeartbeat() error {
 }
 
 func (c *MtsClient) getIp() (string, error) {
-	ip := ""
+	// 如果是 jean 容器，直接从环境变量获取 ip
+	ip := os.Getenv("INSIP")
+	if len(ip) > 0 {
+		return ip, nil
+	}
 	err := requestMts(c, apiIp, struct{}{}, func(_ *[]byte, resp *MtsResponse[string]) error {
 		if resp.Code == 0 {
 			ip = resp.Result
