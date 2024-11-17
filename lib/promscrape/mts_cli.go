@@ -460,18 +460,22 @@ func (c *MtsClient) heartbeat() error {
 					logger.Warnf("mts parse <PullTargetsAddr> err: %v, newAddr: %s", err, *newPullTargetsAddr)
 					return nil
 				}
+				previousAddr := GetPullTargetAddr()
 				if parsedAddr == MtsUrl {
+					if parsedAddr != previousAddr {
+						logger.Infof("mts pull targets addr changed from %s to %s (same to MtsUrl)", previousAddr, parsedAddr)
+						pullTargetsAddr.Store(parsedAddr)
+					}
 					return nil
 				}
 				if len(parsedHeartbeatAddrs) > 0 {
 					for _, heartbeatAddr := range parsedHeartbeatAddrs {
 						if heartbeatAddr == parsedAddr {
 							// pull targets 前提必须先上报心跳
-							previousAddr := GetPullTargetAddr()
 							if previousAddr != parsedAddr {
 								logger.Infof("mts pull targets addr changed from %s to %s", previousAddr, parsedAddr)
+								pullTargetsAddr.Store(parsedAddr)
 							}
-							pullTargetsAddr.Store(parsedAddr)
 							return nil
 						}
 					}
