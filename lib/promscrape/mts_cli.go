@@ -16,10 +16,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -68,6 +70,7 @@ func newAuthToken(t string) *auth.Token {
 var (
 	// metrics
 	mtsHeartbeatFailedMetric  = metrics.NewCounter(`vmagent_mts_heartbeat_failed`)
+	mtsWarningMetrics         = metrics.NewCounter(`vmagent_mts_warning_metrics`)
 	mtsHeartbeatSuccessMetric = metrics.NewCounter(`vmagent_mts_heartbeat_success`)
 
 	mtsPullTargetsNoChangeMetric = metrics.NewCounter(`vmagent_mts_pull_targets_counter_nochange`)
@@ -98,6 +101,27 @@ var (
 )
 
 var (
+	otherHeartbeatAddrs atomic.Value
+	pullTargetsAddr     atomic.Value
+)
+
+func GetOtherHeartbeatAddrs() []string {
+	u := otherHeartbeatAddrs.Load()
+	if u == nil {
+		return nil
+	}
+	return u.([]string)
+}
+
+func GetPullTargetAddr() string {
+	u := pullTargetsAddr.Load()
+	if u == nil {
+		return MtsUrl
+	}
+	return u.(string)
+}
+
+var (
 	OverrideRemoteWriteUrls    []string
 	OverrideRemoteWriteHeaders []string
 	GetAuthTokenByArgId        func(i int) string
@@ -121,6 +145,7 @@ var mtsConfigData atomic.Pointer[[]byte]
 
 func WriteMtsConfigData(w io.Writer) {
 	p := mtsConfigData.Load()
+	logger.Infof("pullTargetsAddr: %v, otherHeartbeatAddrs: %v", GetPullTargetAddr(), GetOtherHeartbeatAddrs())
 	if p == nil {
 		// Nothing to write to w
 		return
@@ -249,6 +274,11 @@ type MtsHeartbeatRequest struct {
 	Stopping bool   `json:"stopping"`
 }
 
+type MtsClientConfig struct {
+	HeartbeatAddrs  []string `json:"heartbeatAddrs"`
+	PullTargetsAddr *string  `json:"pullTargetsAddr"`
+}
+
 type Md5Digest struct {
 	Timestamp int64  `json:"timestamp"`
 	Md5       string `json:"md5"`
@@ -309,6 +339,7 @@ func NewMtsClient() *MtsClient {
 		cancelFunc: cancelFunc,
 		httpClient: &http.Client{
 			Transport: &http.Transport{
+				ResponseHeaderTimeout: time.Second,
 				DialContext:           dialer.DialContext,
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          100,
@@ -316,7 +347,7 @@ func NewMtsClient() *MtsClient {
 				TLSHandshakeTimeout:   10 * time.Second,
 				ExpectContinueTimeout: 1 * time.Second,
 			},
-			Timeout: 5 * time.Second,
+			Timeout: 3 * time.Second,
 		},
 	}
 }
@@ -326,9 +357,11 @@ func (c *MtsClient) StartHeartbeat() error {
 	// init ip
 	ip, err := c.getIp()
 	if err != nil {
+		mtsWarningMetrics.Inc()
 		return fmt.Errorf("init ip err: %w", err)
 	}
 	if ip == "" {
+		mtsWarningMetrics.Inc()
 		return errors.New("ip is empty")
 	}
 	addr = fmt.Sprintf("%s:%s", ip, "8429")
@@ -338,7 +371,8 @@ func (c *MtsClient) StartHeartbeat() error {
 		return err
 	}
 	logger.Infof("mts heartbeat started.")
-	ticker := time.NewTicker(1 * time.Second)
+	logger.Infof("pullTargetsAddr: %v, otherHeartbeatAddrs: %v", GetPullTargetAddr(), GetOtherHeartbeatAddrs())
+	ticker := time.NewTicker(2 * time.Second)
 	go func() {
 		scraperWG.Add(1)
 		defer scraperWG.Done()
@@ -349,6 +383,7 @@ func (c *MtsClient) StartHeartbeat() error {
 		for {
 			select {
 			case sig := <-signals:
+				signal.Stop(signals)
 				if sig == syscall.SIGHUP {
 					// Prevent from the program stop on SIGHUP
 					continue
@@ -356,8 +391,6 @@ func (c *MtsClient) StartHeartbeat() error {
 				logger.Infof("mts client stopping...")
 				c.stopping.Store(true)
 				_ = c.heartbeat()
-				signal.Stop(signals)
-				//
 				go func() {
 					logger.Infof("mts client will exit after waiting for 10 seconds")
 					time.Sleep(10 * time.Second)
@@ -370,10 +403,8 @@ func (c *MtsClient) StartHeartbeat() error {
 				logger.Infof("mts client exit. triggerred by globalStopCh, adjust -http.shutdownDelay to bigger value to wait for mts gracefally shutdown.")
 				return
 			case <-ticker.C:
-				err = c.heartbeat()
-				if err != nil {
-					logger.Warnf("mts heartbeat failed: %s", err)
-				}
+				// logged in method
+				_ = c.heartbeat()
 			}
 		}
 	}()
@@ -386,7 +417,7 @@ func (c *MtsClient) getIp() (string, error) {
 	if len(ip) > 0 {
 		return ip, nil
 	}
-	err := requestMts(c, apiIp, struct{}{}, func(_ *[]byte, resp *MtsResponse[string]) error {
+	err := requestMts(c, MtsUrl+apiIp, struct{}{}, func(_ *[]byte, resp *MtsResponse[string]) error {
 		if resp.Code == 0 {
 			ip = resp.Result
 		}
@@ -397,19 +428,121 @@ func (c *MtsClient) getIp() (string, error) {
 
 func (c *MtsClient) heartbeat() error {
 	entity := MtsHeartbeatRequest{Ident: ident, Addr: addr, Ts: time.Now().UnixMilli(), Tenant: Tenants[0], Group: scrapeGroup, Stopping: c.stopping.Load()}
-	err := requestMts(c, apiHeartbeat, entity, func(_ *[]byte, result *MtsResponse[string]) error {
-		if result.Code == 0 {
+	err := requestMts(c, MtsUrl+apiHeartbeat, entity, func(_ *[]byte, mtsResp *MtsResponse[*MtsClientConfig]) error {
+		if mtsResp.Code == 0 {
 			mtsHeartbeatSuccessMetric.Inc()
+			if mtsResp.Result != nil {
+				heartbeatAddrs := mtsResp.Result.HeartbeatAddrs
+				parsedHeartbeatAddrs := make([]string, 0, len(heartbeatAddrs))
+				if len(heartbeatAddrs) > 0 {
+					for _, newAddr := range heartbeatAddrs {
+						parsedAddr, err := parseUrl(newAddr)
+						if err != nil {
+							mtsWarningMetrics.Inc()
+							logger.Warnf("mts parse <HeartbeatAddrs> err: %v, newAddr: %s", err, newAddr)
+							continue
+						}
+						if parsedAddr == MtsUrl {
+							continue
+						}
+						parsedHeartbeatAddrs = append(parsedHeartbeatAddrs, parsedAddr)
+					}
+					otherHeartbeatAddrs.Store(parsedHeartbeatAddrs)
+				}
+
+				newPullTargetsAddr := mtsResp.Result.PullTargetsAddr
+				if newPullTargetsAddr == nil {
+					return nil
+				}
+				parsedAddr, err := parseUrl(*newPullTargetsAddr)
+				if err != nil {
+					mtsWarningMetrics.Inc()
+					logger.Warnf("mts parse <PullTargetsAddr> err: %v, newAddr: %s", err, *newPullTargetsAddr)
+					return nil
+				}
+				if parsedAddr == MtsUrl {
+					return nil
+				}
+				if len(parsedHeartbeatAddrs) > 0 {
+					for _, heartbeatAddr := range parsedHeartbeatAddrs {
+						if heartbeatAddr == parsedAddr {
+							// pull targets 前提必须先上报心跳
+							previousAddr := GetPullTargetAddr()
+							if previousAddr != parsedAddr {
+								logger.Infof("mts pull targets addr changed from %s to %s", previousAddr, parsedAddr)
+							}
+							pullTargetsAddr.Store(parsedAddr)
+							return nil
+						}
+					}
+					mtsWarningMetrics.Inc()
+					logger.Warnf("mts pull targets addr (%s) is not in heartbeat addrs, %v", parsedAddr, parsedHeartbeatAddrs)
+				}
+			}
 			return nil
 		} else {
-			return errors.New(result.Message)
+			mtsWarningMetrics.Inc()
+			logger.Warnf("mts heartbeat failed: %s", mtsResp.Message)
+			return errors.New(mtsResp.Message)
 		}
 	})
 	if err != nil {
+		logger.Warnf("mts heartbeat failed: %s", err)
 		mtsHeartbeatFailedMetric.Inc()
-		return fmt.Errorf("mts heartbeat: %s", err)
+	}
+
+	otherAddrs := GetOtherHeartbeatAddrs()
+	if len(otherAddrs) == 0 {
+		return err
+	}
+	if len(otherAddrs) == 1 {
+		err := requestMts(c, otherAddrs[0]+apiHeartbeat, entity, func(_ *[]byte, mtsResp *MtsResponse[*MtsClientConfig]) error {
+			if mtsResp.Code == 0 {
+				mtsHeartbeatSuccessMetric.Inc()
+				return nil
+			} else {
+				return errors.New(mtsResp.Message)
+			}
+		})
+		if err != nil {
+			mtsWarningMetrics.Inc()
+			logger.Warnf("mts heartbeat to otherAddrs[0](%s) failed: %s", otherAddrs[0], err)
+		}
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(len(otherAddrs))
+		for _, otherAddr := range otherAddrs {
+			go func() {
+				defer wg.Done()
+				err := requestMts(c, otherAddr+apiHeartbeat, entity, func(_ *[]byte, mtsResp *MtsResponse[*MtsClientConfig]) error {
+					if mtsResp.Code == 0 {
+						mtsHeartbeatSuccessMetric.Inc()
+						return nil
+					} else {
+						return errors.New(mtsResp.Message)
+					}
+				})
+				if err != nil {
+					mtsWarningMetrics.Inc()
+					logger.Warnf("mts heartbeat to otherAddr(%s) failed: %s", otherAddr, err)
+				}
+			}()
+		}
+		wg.Wait()
 	}
 	return err
+}
+
+func parseUrl(newAddr string) (string, error) {
+	if !strings.HasPrefix(newAddr, "http") {
+		newAddr = "http://" + newAddr
+	}
+	newAddr = strings.TrimSuffix(newAddr, "/")
+	parse, err := url.Parse(newAddr)
+	if err != nil {
+		return "", fmt.Errorf("mts parse url err: %w, newAddr: %s", err, newAddr)
+	}
+	return parse.String(), nil
 }
 
 func IsScrapeInitErr(err error) bool {
@@ -422,7 +555,7 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	var cfg *Config
 	req := MtsGetTargetsRequest{Ident: ident, Sign: sign.signature(), Tenant: Tenants[0], Group: scrapeGroup}
-	err := requestMts(c, apiGetTarget, req, func(respData *[]byte, mtsResult *MtsResponse[PullTargetResult]) error {
+	err := requestMts(c, GetPullTargetAddr()+apiGetTarget, req, func(respData *[]byte, mtsResult *MtsResponse[*PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
 			// targets 发生变化，需要解析
@@ -430,11 +563,13 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 			// 获取sign判断，获取md5、timestamp
 			signArray := strings.Split(result.Sign, "@")
 			if len(signArray) != 2 {
+				mtsWarningMetrics.Inc()
 				return fmt.Errorf("mts sign format err: len(signArr)!=2: result.sign: %s", result.Sign)
 			}
 			remoteMd5 := signArray[1]
 			remoteTimestamp, err := strconv.ParseInt(signArray[0], 10, 64)
 			if err != nil {
+				mtsWarningMetrics.Inc()
 				return fmt.Errorf("mts parse sign.ts(%s) err: %v", result.Sign, err)
 			}
 			// parse scrape configs
@@ -507,6 +642,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 		case 3:
 			return errGroupNotInitialized
 		default:
+			mtsWarningMetrics.Inc()
 			return errors.New(mtsResult.Message)
 		}
 	})
@@ -517,7 +653,7 @@ func (c *MtsClient) loadConfig(_ string) (*Config, error) {
 	return cfg, err
 }
 
-func requestMts[T any, Z any](c *MtsClient, path string, req T, handler func(respData *[]byte, result *MtsResponse[Z]) error) error {
+func requestMts[T any, Z any](c *MtsClient, url string, req T, handler func(respData *[]byte, result *MtsResponse[Z]) error) error {
 	retryCount := 0
 	var err error
 retryRequest:
@@ -530,7 +666,7 @@ retryRequest:
 	if err != nil {
 		return fmt.Errorf("marsha json err: %w", err)
 	}
-	request, err := http.NewRequest("POST", MtsUrl+path, bytes.NewBuffer(reqBody))
+	request, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return err
 	}
