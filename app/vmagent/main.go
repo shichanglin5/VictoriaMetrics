@@ -157,7 +157,6 @@ func main() {
 	sig := procutil.WaitForSigterm()
 	logger.Infof("received signal %s", sig)
 	remotewrite.StopIngestionRateLimiter()
-	pushmetrics.Stop()
 
 	startTime = time.Now()
 	logger.Infof("gracefully shutting down webservice at %q", listenAddrs)
@@ -167,6 +166,7 @@ func main() {
 	logger.Infof("successfully shut down the webservice in %.3f seconds", time.Since(startTime).Seconds())
 
 	promscrape.Stop()
+	pushmetrics.Stop()
 
 	if len(*influxListenAddr) > 0 {
 		influxServer.MustStop()

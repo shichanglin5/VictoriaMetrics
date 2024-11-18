@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -31,6 +32,10 @@ const (
 	apiHeartbeat = "/stats/heartbeat"
 	apiGetTarget = "/stats/getTargets"
 	jobLabel     = "job"
+)
+
+var (
+	shutdownDelay = flag.Duration("mts.shutdownDelay", 0, `Optional delay before http server shutdown. During this delay, the server returns non-OK responses from /health page, so load balancers can route new requests to other servers`)
 )
 
 var TenantToAuthTokenStr = map[string]string{
@@ -392,8 +397,10 @@ func (c *MtsClient) StartHeartbeat() error {
 				c.stopping.Store(true)
 				_ = c.heartbeat()
 				go func() {
-					logger.Infof("mts client will exit after waiting for 10 seconds")
-					time.Sleep(10 * time.Second)
+					if *shutdownDelay > 0 {
+						logger.Infof("mts client will exit after waiting for %s seconds", shutdownDelay.String())
+						time.Sleep(*shutdownDelay)
+					}
 					c.cancelFunc()
 				}()
 			case <-c.stopCh:
