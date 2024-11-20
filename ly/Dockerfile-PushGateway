@@ -23,11 +23,11 @@ ENV GOMEMLIMIT=6GiB
 ENV REGION='' MTS_URL='' TENANTS='*' IDC='hb1'
 ENTRYPOINT ["/vmagent", \
     "-enableMultitenantHandlers=false", \
+    "-maxInsertRequestSize=67108864", \
     "-http.shutdownDelay=45s", \
     "-promscrape.cluster.name=write-1", \
     "-promscrape.configCheckInterval=3s", \
     "-promscrape.dropOriginalLabels=true", \
-    "-promscrape.maxScrapeSize=20000000", \
     "-promscrape.streamParse=true", \
     "-promscrape.suppressScrapeErrorsDelay=30m", \
     "-remoteWrite.forceVMProto=true", \
