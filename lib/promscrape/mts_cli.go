@@ -56,6 +56,7 @@ var TenantToAuthTokenStr = map[string]string{
 	"skyeye-tlb-static":   "2:8",
 	"skyeye-tlb-uat":      "2:9",
 	"skynet-alert":        "2:10",
+	"skyeye-dns":          "2:11",
 	"skyeye-apm":          "3:0",
 	"skyeye-apm-uat":      "3:1",
 	"skyeye-apm-topo":     "3:2",
