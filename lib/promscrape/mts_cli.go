@@ -45,6 +45,7 @@ var TenantToAuthTokenStr = map[string]string{
 	"inf-dbproxy":         "1:2",
 	"inf-redisproxy":      "1:3",
 	"inf-pay":             "1:4",
+	"inf-gtc":             "1:5",
 	"skyeye-band":         "2:0",
 	"skyeye-band-large":   "2:1",
 	"skyeye-band-uat":     "2:2",
