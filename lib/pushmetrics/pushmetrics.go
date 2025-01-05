@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promscrape"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"os"
 	"strings"
 	"sync"
@@ -47,14 +47,9 @@ func Init() {
 
 	// scrape-{idc}-{tenant} 模式添加 job 标签
 	var jobName string
-	if len(promscrape.MtsUrl) > 0 {
-		idc := os.Getenv("IDC")
-		if idc != "" {
-			jobName = fmt.Sprintf("scrape-%s-%s", idc, promscrape.Tenants[0])
-		} else {
-			jobName = fmt.Sprintf("scrape-%s", promscrape.Tenants[0])
-		}
-	} else {
+	if mts.IsVmAgentType() {
+		jobName = fmt.Sprintf("scrape-%s-%s", mts.ScrapeGroup, mts.ScrapeTenant)
+	} else if mts.IsPushGatewayType() {
 		idc := os.Getenv("IDC")
 		if idc != "" {
 			jobName = fmt.Sprintf("pushgateway-%s", idc)

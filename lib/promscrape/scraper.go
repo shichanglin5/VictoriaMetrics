@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -84,7 +85,7 @@ func Stop() {
 }
 
 func noScrapeConfig() bool {
-	return *promscrapeConfigFile == "" && len(MtsUrl) == 0
+	return *promscrapeConfigFile == "" && !mts.IsVmAgentType()
 }
 
 var (
@@ -111,20 +112,15 @@ func WriteConfigData(w io.Writer) {
 func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest), globalStopCh <-chan struct{}) {
 	metrics.RegisterSet(configMetricsSet)
 
-	// Register SIGHUP handler for config reload before loadConfig.
-	// This guarantees that the config will be re-read if the signal arrives just after loadConfig.
+	// Register SIGHUP handler for config reload before loadMtsConfig.
+	// This guarantees that the config will be re-read if the signal arrives just after loadMtsConfig.
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240
 	sighupCh := procutil.NewSighupChan()
 
 	logger.Infof("reading scrape configs from %q", configFile)
 	var doLoadConfig func(configFile string) (*Config, error)
-	if len(MtsUrl) > 0 {
-		mtsClient := NewMtsClient()
-		err := mtsClient.StartHeartbeat()
-		if err != nil {
-			logger.Fatalf("cannot start mts heartbeat: %s", err)
-		}
-		doLoadConfig = mtsClient.loadConfig
+	if mts.IsVmAgentType() {
+		doLoadConfig = loadScrapeConfig
 	} else {
 		doLoadConfig = loadConfig
 	}

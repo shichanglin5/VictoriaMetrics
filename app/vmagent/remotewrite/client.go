@@ -181,6 +181,35 @@ func newHTTPClient(argIdx int, remoteWriteURL, sanitizedURL string, fq *persiste
 	return c
 }
 
+// newTenantHTTPClient 用于 mts 配置场景
+func newTenantHTTPClient(tenantHeader string, remoteWriteURL, sanitizedURL string, fq *persistentqueue.FastQueue, concurrency int) *client {
+	opts := &promauth.Options{
+		Headers: []string{tenantHeader},
+	}
+	authCfg, _ := opts.NewConfig()
+	tr := &http.Transport{
+		DialContext:         netutil.NewStatDialFunc("vmagent_remotewrite"),
+		MaxConnsPerHost:     2 * concurrency,
+		MaxIdleConnsPerHost: 2 * concurrency,
+		IdleConnTimeout:     time.Minute,
+		WriteBufferSize:     64 * 1024,
+	}
+	hc := &http.Client{
+		Transport: authCfg.NewRoundTripper(tr),
+	}
+	c := &client{
+		sanitizedURL:   sanitizedURL,
+		remoteWriteURL: remoteWriteURL,
+		authCfg:        authCfg,
+		fq:             fq,
+		hc:             hc,
+		stopCh:         make(chan struct{}),
+		useVMProto:     true,
+	}
+	c.sendBlock = c.sendBlockHTTP
+	return c
+}
+
 func (c *client) init(argIdx, concurrency int, sanitizedURL string) {
 	limitReached := metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_rate_limit_reached_total{url=%q}`, c.sanitizedURL))
 	if bytesPerSec := rateLimit.GetOptionalArg(argIdx); bytesPerSec > 0 {

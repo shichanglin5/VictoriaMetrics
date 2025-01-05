@@ -20,7 +20,7 @@ FROM docker.17usoft.com/lhhdz/alpine:3.20.2
 ARG APP_NAME
 EXPOSE 8429
 ENV GOMEMLIMIT=6GiB
-ENV IDENT_TAG=ident URL_TAG=url SCRAPE_GROUP=hb1
+ENV URL_TAG=url SCRAPE_GROUP=hb1
 ENV IDC=$SCRAPE_GROUP
 ENV MTS_URL=http://inf-mts.dss.17usoft.com
 ENTRYPOINT ["/vmagent",  \

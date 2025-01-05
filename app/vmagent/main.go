@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"io"
 	"net/http"
 	"os"
@@ -128,6 +129,7 @@ func main() {
 	}
 	logger.Infof("starting vmagent at %q...", listenAddrs)
 	startTime := time.Now()
+	mts.Init()
 	remotewrite.StartIngestionRateLimiter()
 	remotewrite.Init()
 	common.StartUnmarshalWorkers()
@@ -511,12 +513,12 @@ func getAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
 	}
-	authToken := promscrape.TenantToAuthToken[tenant]
-	if authToken == nil {
+	authToken, ok := remotewrite.TenantToAuthToken.Load(tenant)
+	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
 	}
-	return authToken
+	return authToken.(*auth.Token)
 }
 
 func processMultitenantRequest(w http.ResponseWriter, r *http.Request, path string) bool {

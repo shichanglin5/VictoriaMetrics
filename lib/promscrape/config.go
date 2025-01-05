@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmagent/remotewrite"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"net/url"
 	"path/filepath"
@@ -1219,10 +1221,15 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// dbproxy 不需要 ident tag
 	var tenant string
 	if at != nil {
-		tenant = AuthTokenToTenant[*at]
+		t, ok := remotewrite.AuthTokenToTenant.Load(at.String())
+		if !ok {
+			mts.MtsWarningMetrics.Inc()
+			return nil, fmt.Errorf("cannot find tenant for auth token %q", at)
+		}
+		tenant = t.(string)
 	}
-	if len(identTag) > 0 && tenant != "inf-dbproxy" {
-		labels.Add(identTag, address)
+	if tenant != "inf-dbproxy" && tenant != "inf-redisproxy" {
+		labels.Add("ident", address)
 	}
 	// autoMetrics 比如 target_up 等添加额外的 url 标签
 	_, err := url.Parse(scrapeURL)
