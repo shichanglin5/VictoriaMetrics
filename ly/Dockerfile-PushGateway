@@ -20,7 +20,9 @@ FROM docker.17usoft.com/lhhdz/alpine:3.20.2
 ARG APP_NAME
 EXPOSE 8429
 ENV GOMEMLIMIT=6GiB
-ENV REGION='' MTS_URL='' TENANTS='*' IDC='hb1'
+ENV IDC='hb1'
+ENV MTS_URL=http://inf-mts.dss.17usoft.com
+ENV MTS_CLIENT_TYPE=pushgateway
 ENTRYPOINT ["/vmagent", \
     "-enableMultitenantHandlers=false", \
     "-maxInsertRequestSize=67108864", \

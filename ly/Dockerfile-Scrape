@@ -20,9 +20,10 @@ FROM docker.17usoft.com/lhhdz/alpine:3.20.2
 ARG APP_NAME
 EXPOSE 8429
 ENV GOMEMLIMIT=6GiB
-ENV URL_TAG=url SCRAPE_GROUP=hb1
-ENV IDC=$SCRAPE_GROUP
+ENV IDC=hb1
+ENV SCRAPE_TENANT=""
 ENV MTS_URL=http://inf-mts.dss.17usoft.com
+ENV MTS_CLIENT_TYPE=vmagent
 ENTRYPOINT ["/vmagent",  \
     "-promscrape.noStaleMarkers=true", \
     "-promscrape.configCheckInterval=3s", \
@@ -31,7 +32,7 @@ ENTRYPOINT ["/vmagent",  \
     "-mts.shutdownDelay=30s", \
     "-remoteWrite.showURL=true", \
     "-promscrape.maxScrapeSize=50000000", \
-    "-pushmetrics.url='http://hb1.infprometheus.dss.17usoft.com/write1/api/v1/import/prometheus'", \
+    "-pushmetrics.url='http://127.0.0.1:8429/api/v1/import/prometheus'", \
     "-pushmetrics.header='X-Scope-OrgID:meta'", \
     "-pushmetrics.interval=5s", \
     "-remoteWrite.forceVMProto=true" \

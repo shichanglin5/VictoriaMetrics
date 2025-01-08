@@ -14,20 +14,18 @@ var (
 )
 
 var (
-	VmAgentQueueSize             *metrics.Gauge
 	MtsPullTargetsNoChangeMetric *metrics.Counter
 	MtsPullTargetsSuccessMetric  *metrics.Counter
 	MtsPullTargetsUpdateSeconds  *metrics.Gauge
 	MtsPullTargetsFailedMetric   *metrics.Counter
 
-	FastQueueSize          atomic.Int64
 	PullTargetSize         atomic.Int64
 	PullTargetsAddr        atomic.Value
 	MtsPullTargetsUpdateTs atomic.Int64
 )
 
 func InitCliVmAgent() error {
-	VmAgentQueueSize = metrics.NewGauge(`vmagent_fast_queue_size`, func() float64 {
+	_ = metrics.NewGauge(`vmagent_fast_queue_size`, func() float64 {
 		return float64(FastQueueSize.Load())
 	})
 	MtsPullTargetsNoChangeMetric = metrics.NewCounter(`vmagent_mts_pull_targets_counter_nochange`)
@@ -53,7 +51,7 @@ func InitCliVmAgent() error {
 	ScrapeTenant = os.Getenv("SCRAPE_TENANT")
 	if len(ScrapeTenant) > 0 {
 		ScrapeTenant = strings.TrimSpace(ScrapeTenant)
-		logger.Infof("load mts scrape tenant from env: %s", ScrapeGroup)
+		logger.Infof("load mts scrape tenant from env: %s", ScrapeTenant)
 	} else {
 		logger.Fatalf("env SCRAPE_TENANT not set")
 	}

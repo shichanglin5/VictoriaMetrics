@@ -4,11 +4,19 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
+	"github.com/VictoriaMetrics/metrics"
 	"time"
 )
 
 func init() {
-	mts.RegisterMtsClient("pushgateway", nil, StartVmAgentConfig, nil)
+	mts.RegisterMtsClient("pushgateway", InitFunc, StartVmAgentConfig, nil)
+}
+
+func InitFunc() error {
+	_ = metrics.NewGauge(`vmagent_fast_queue_size`, func() float64 {
+		return float64(mts.FastQueueSize.Load())
+	})
+	return nil
 }
 
 // StartVmAgentConfig ：agent 和 pushgateway 都需要从 mts 加载 remote write 配置

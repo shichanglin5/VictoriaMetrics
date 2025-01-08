@@ -45,6 +45,7 @@ var (
 
 var (
 	ClientType                string
+	FastQueueSize             atomic.Int64
 	MtsHeartbeatFailedMetric  = metrics.NewCounter(`vmagent_mts_heartbeat_failed`)
 	MtsWarningMetrics         = metrics.NewCounter(`vmagent_mts_warning_metrics`)
 	MtsHeartbeatSuccessMetric = metrics.NewCounter(`vmagent_mts_heartbeat_success`)

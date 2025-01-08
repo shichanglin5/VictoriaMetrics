@@ -385,7 +385,6 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 	newAuthTokenToRwctxs := &sync.Map{}
 	newTenantToAuthToken := &sync.Map{}
 	newAuthTokenToTenant := &sync.Map{}
-	newRemoteWriteURLs := ""
 
 	shouldReload := false
 	for tenantName, tenantToken := range newTenantToAuthTokens {
@@ -418,7 +417,6 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 				tenantRwctxs = append(tenantRwctxs, newRwctx)
 				newRemoteWriteCtxsMapping.Store(rwxKey, newRwctx)
 				rwctxs = append(rwctxs, newRwctx)
-				newRemoteWriteURLs += sanitizedURL + ","
 			} else {
 				// 已存在，判断 clusterUrl 是否改变，如果改变了，则更新
 				oldRwctx := rwctx.(*remoteWriteCtx)
@@ -430,7 +428,6 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 				tenantRwctxs = append(tenantRwctxs, rwctx.(*remoteWriteCtx))
 				newRemoteWriteCtxsMapping.Store(rwxKey, oldRwctx)
 				rwctxs = append(rwctxs, oldRwctx)
-				newRemoteWriteURLs += sanitizedURL + ","
 			}
 		}
 		newAuthTokenToRwctxs.Store(newToken.String(), tenantRwctxs)
@@ -513,10 +510,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 	}
 
 	rwctxsGlobal = rwctxs
-	if len(newRemoteWriteURLs) > 0 {
-		newRemoteWriteURLs = newRemoteWriteURLs[:len(newRemoteWriteURLs)-1]
-	}
-	_ = remoteWriteURLs.Set(newRemoteWriteURLs)
+	_ = remoteWriteURLs.Set("mts")
 	mts.FastQueueSize.Store(int64(len(rwctxsGlobal)))
 	return rwctxs
 }
