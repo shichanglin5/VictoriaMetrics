@@ -224,7 +224,6 @@ func Init() {
 		//reloadMtsConfig()
 	} else {
 		rwctxsGlobal = newRemoteWriteCtxs(nil, *remoteWriteURLs)
-
 	}
 
 	disableOnDiskQueues := []bool(*disableOnDiskQueue)

@@ -17,6 +17,7 @@ RUN DATEINFO_TAG=$(date -u +'%Y%m%d-%H%M%S') && \
     		-o bin/${APP_NAME} ${PKG_PREFIX}/app/${APP_NAME}
 
 FROM docker.17usoft.com/lhhdz/alpine:3.20.2
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && apk add curl
 ARG APP_NAME
 EXPOSE 8429
 ENV GOMEMLIMIT=6GiB
