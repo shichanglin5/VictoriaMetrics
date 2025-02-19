@@ -29,10 +29,10 @@ func mergeURLs(uiURL, requestURI *url.URL, dropSrcPathPrefixParts int) *url.URL 
 		}
 		// override default by request params
 		for i := range v {
-			requestParams.Add(k, v[i])
+			defaultRequestParams.Add(k, v[i])
 		}
 	}
-	targetURL.RawQuery = requestParams.Encode()
+	targetURL.RawQuery = defaultRequestParams.Encode()
 	return &targetURL
 }
 
