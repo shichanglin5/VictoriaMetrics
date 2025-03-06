@@ -5,6 +5,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"github.com/VictoriaMetrics/metrics"
+	"strings"
 	"time"
 )
 
@@ -71,6 +72,7 @@ func reloadMtsConfig() {
 			validTenantToAuthTokens[k] = v
 		}
 
+		// cluster urls
 		vmClusterSet := make(map[string]string, len(newClusterUrls))
 		for k, v := range newClusterUrls {
 			if prevK, ok := vmClusterSet[v]; !ok {
@@ -88,6 +90,24 @@ func reloadMtsConfig() {
 			validClusterUrls[v] = k
 		}
 
-		ReloadRemoteWriteCtxs(validTenantToAuthTokens, validClusterUrls)
+		// tenant to idcs
+		tenantToIdcs := vmConfigs.TenantToIdcs
+		validTenantToIdcs := make(map[string]map[string]struct{}, len(tenantToIdcs))
+		for k, v := range tenantToIdcs {
+			v = strings.TrimSpace(v)
+			if len(v) == 0 {
+				// 如果配置为 "",则表示默认不写数据
+				validTenantToIdcs[k] = make(map[string]struct{}, 0)
+			} else {
+				tenantIdcs := strings.Split(v, ",") // "th,wx" 表示要往 th 和 wx 两个集群写，如果为空则默认全写
+				tenantIdcsSet := make(map[string]struct{})
+				for _, tenantIdc := range tenantIdcs {
+					tenantIdcsSet[tenantIdc] = struct{}{}
+				}
+				validTenantToIdcs[k] = tenantIdcsSet
+			}
+		}
+
+		ReloadRemoteWriteCtxs(validTenantToAuthTokens, validClusterUrls, validTenantToIdcs)
 	})
 }

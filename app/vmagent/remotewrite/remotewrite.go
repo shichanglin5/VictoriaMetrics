@@ -367,7 +367,7 @@ var (
 // 1、tenant -> token 是否变化
 // 2、token -> tenant 是否变化
 // 3、cluster urls 是否变化
-func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string) []*remoteWriteCtx {
+func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string, tenantToIdcs map[string]map[string]struct{}) []*remoteWriteCtx {
 	maxInmemoryBlocks := memory.Allowed() / len(newTenantToAuthTokens) / *maxRowsPerBlock / 100
 	if maxInmemoryBlocks / *queues > 100 {
 		// There is no much sense in keeping higher number of blocks in memory,
@@ -378,7 +378,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 	if maxInmemoryBlocks < 2 {
 		maxInmemoryBlocks = 2
 	}
-	rwctxs := make([]*remoteWriteCtx, 0, len(newTenantToAuthTokens)*len(clusterUrls))
+	rwctxs := make([]*remoteWriteCtx, 0)
 
 	newRemoteWriteCtxsMapping := &sync.Map{}
 	newAuthTokenToRwctxs := &sync.Map{}
@@ -401,6 +401,13 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 		// 遍历 urls 创建 remote write ctx
 		tenantRwctxs := make([]*remoteWriteCtx, 0)
 		for clusterIdc, clusterUrl := range clusterUrls {
+			// 当配置 tenant 要写的 idc 时，判断是否属于该 tenant 配置的 idc，不属于则跳过
+			if tenantIdcs, ok := tenantToIdcs[tenantName]; ok {
+				if _, ok := tenantIdcs[clusterIdc]; !ok {
+					continue
+				}
+			}
+
 			// 根据 {tenantName}-{idc} 生成 key，如果不存在，则创建新的 remote write ctx
 			rwxKey := fmt.Sprintf("%s_%s", clusterIdc, tenantName)
 			remoteWriteURL, err := url.Parse(clusterUrl)
@@ -448,7 +455,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string)
 			if t, ok := newTenantToAuthToken.Load(k); !ok {
 				// 如果 tenant 删除，需要 reload
 				shouldReload = true
-			} else if t != v.(*auth.Token).String() {
+			} else if t.(*auth.Token).String() != v.(*auth.Token).String() {
 				// 如果 tenant 对应的 authToken 改变，需要 reload
 				shouldReload = true
 			}
