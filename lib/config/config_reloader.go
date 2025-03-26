@@ -19,7 +19,7 @@ import (
 
 var (
 	configPath          = flag.String("runtime.config", "", "path to config")
-	configCheckInterval = flag.Duration("runtime.configCheckInterval", 10*time.Second, "interval for config file re-read. "+
+	configCheckInterval = flag.Duration("runtime.configCheckInterval", 3*time.Second, "interval for config file re-read. "+
 		"Zero value disables config re-reading. By default, refreshing is disabled, send SIGHUP for config refresh.")
 )
 

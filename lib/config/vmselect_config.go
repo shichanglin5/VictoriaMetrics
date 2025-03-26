@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 
 	//"errors"
 	"fmt"
@@ -25,8 +26,10 @@ var (
 			return 0
 		}
 	})
-	MetricsMatchBlockedTotal    = metrics.NewCounter(`vmselect_match_query_blocked_total`)
-	MetricsNotMatchBlockedTotal = metrics.NewCounter(`vmselect_notmatch_query_blocked_total`)
+	MetricsQueryContainsPassTotal    = metrics.NewCounter(`vmselect_query_containsPass_total`)
+	MetricsQueryContainsBlockTotal   = metrics.NewCounter(`vmselect_query_containsBlock_total`)
+	MetricsQueryMatchBlockedTotal    = metrics.NewCounter(`vmselect_query_matchBlocked_total`)
+	MetricsQueryNotMatchBlockedTotal = metrics.NewCounter(`vmselect_query_notMatchBlocked_total`)
 )
 var ErrBlockedQuery = errors.New("query is blocked! contact administator for more information")
 var ShouldBlockQuery func(string) bool
@@ -39,11 +42,16 @@ func (l Labels) Contains(label string) bool {
 }
 
 type VMSelectConfig struct {
-	BlockedQueries      *BlockedQueries `yaml:"blockedQueries,omitempty"`
-	TreatDotsAsIsLabels []string        `yaml:"treatDotsAsIsLabels,omitempty"`
+	QueryBlockedRules   []*QueryBlockedRules `yaml:"queryBlockedRules,omitempty"`
+	TreatDotsAsIsLabels []string             `yaml:"treatDotsAsIsLabels,omitempty"`
 }
 
-type BlockedQueries struct {
+type QueryBlockedRules struct {
+	Predication string `yaml:"prediction,omitempty"`
+
+	IgnoreIfContains []string `yaml:"ignoreIfContains,omitempty"`
+	BlockIfContains  []string `yaml:"blockIfContains,omitempty"`
+
 	BlockIfMatch    []string `yaml:"blockIfMatch,omitempty"`
 	BlockIfNotMatch []string `yaml:"blockIfNotMatch,omitempty"`
 }
@@ -65,7 +73,7 @@ func InitVMSelectConfig() (context.CancelFunc, error) {
 		}
 
 		// 加载 block query 规则
-		loadQueryBlockRules(c.BlockedQueries)
+		loadQueryBlockRules(c.QueryBlockedRules)
 
 		// 设置 VMSelectConfigVar
 		VMSelectConfigVar.Store(&c)
@@ -73,8 +81,19 @@ func InitVMSelectConfig() (context.CancelFunc, error) {
 	})
 }
 
-func loadQueryBlockRules(blockRules *BlockedQueries) {
-	if blockRules == nil {
+const (
+	// PredictPass 配置 ignore 规则，命中的话直接放行
+	PredictPass byte = 0
+
+	// PredictContinue 继续执行其他规则，判断是否屏蔽此次请求
+	PredictContinue byte = 1
+
+	// PredictProhibit 直接屏蔽请求
+	PredictProhibit byte = 2
+)
+
+func loadQueryBlockRules(blockRules []*QueryBlockedRules) {
+	if len(blockRules) == 0 {
 		queryBlockEnabled = false
 		logger.Infof("blockedQueries is empty, skip load")
 		ShouldBlockQuery = func(string) bool {
@@ -82,56 +101,113 @@ func loadQueryBlockRules(blockRules *BlockedQueries) {
 		}
 		return
 	}
-	BlockIfMatchRules := make([]*regexp.Regexp, 0)
-	if blockRules.BlockIfMatch != nil {
-		for _, regxRule := range blockRules.BlockIfMatch {
-			compile, err := regexp.Compile(regxRule)
-			if err != nil {
-				logger.Warnf("cannot compile regular expression %q: %s", regxRule, err)
-				continue
+	BlockPredicationFuncs := make([]func(string) byte, 0, len(blockRules))
+	for _, blockRule := range blockRules {
+		predication := strings.TrimSpace(blockRule.Predication)
+		var predicationFunc func(string) bool
+		if len(predication) > 0 {
+			if predication == ".*" {
+				predicationFunc = func(s string) bool {
+					return true
+				}
+			} else {
+				predicationRegx, err := regexp.Compile(blockRule.Predication)
+				if err != nil {
+					logger.Warnf("cannot compile blockRule.Predication(%s) error: %s", predication, err)
+					continue
+				}
+				predicationFunc = func(s string) bool {
+					return predicationRegx.MatchString(s)
+				}
 			}
-			if compile != nil {
-				BlockIfMatchRules = append(BlockIfMatchRules, compile)
+		} else {
+			logger.Warnf("ignore block rule: blockRule.Predication is empty!")
+			continue
+		}
+		blockIfMatchRules := make([]*regexp.Regexp, 0, len(blockRule.BlockIfMatch))
+		for _, blockIfMatch := range blockRule.BlockIfMatch {
+			if len(strings.TrimSpace(blockIfMatch)) > 0 {
+				blockIfMatchRegx, err := regexp.Compile(blockIfMatch)
+				if err != nil {
+					logger.Warnf("cannot compile blockRule.BlockIfMatch (%s) error: %s, prediction:(%s)", blockIfMatch, err, predication)
+					continue
+				}
+				blockIfMatchRules = append(blockIfMatchRules, blockIfMatchRegx)
 			}
 		}
-	}
-	BlockIfNotMatchRules := make([]*regexp.Regexp, 0)
-	if blockRules.BlockIfNotMatch != nil {
-		for _, regxRule := range blockRules.BlockIfNotMatch {
-			compile, err := regexp.Compile(regxRule)
-			if err != nil {
-				logger.Warnf("cannot compile regular expression %q: %s", regxRule, err)
-				continue
-			}
-			if compile != nil {
-				BlockIfNotMatchRules = append(BlockIfNotMatchRules, compile)
+		blockIfNotMatchRules := make([]*regexp.Regexp, 0, len(blockRule.BlockIfNotMatch))
+		for _, blockIfNotMatch := range blockRule.BlockIfNotMatch {
+			if len(strings.TrimSpace(blockIfNotMatch)) > 0 {
+				blockIfNotMatchRegx, err := regexp.Compile(blockIfNotMatch)
+				if err != nil {
+					logger.Warnf("cannot compile blockRule.BlockIfNotMatch (%s) error: %s, prediction:(%s)", blockIfNotMatch, err, predication)
+					continue
+				}
+				blockIfNotMatchRules = append(blockIfNotMatchRules, blockIfNotMatchRegx)
 			}
 		}
+		if len(blockIfMatchRules) == 0 && len(blockIfNotMatchRules) == 0 {
+			continue
+		}
+		// 返回 true 表示需要拒绝此次查询
+		BlockPredicationFuncs = append(BlockPredicationFuncs, func(queryStr string) byte {
+			if predicationFunc(queryStr) {
+				if len(blockRule.IgnoreIfContains) > 0 {
+					for _, ignoreCase := range blockRule.IgnoreIfContains {
+						// 如果包含 ignore case，则直接跳过，不屏蔽当前查询
+						if strings.Contains(queryStr, ignoreCase) {
+							MetricsQueryContainsPassTotal.Inc()
+							return PredictPass
+						}
+					}
+				}
+				if len(blockRule.BlockIfContains) > 0 {
+					for _, blockCase := range blockRule.BlockIfContains {
+						// 如果包含 block case 直接屏蔽
+						if strings.Contains(queryStr, blockCase) {
+							MetricsQueryContainsBlockTotal.Inc()
+							return PredictProhibit
+						}
+					}
+				}
+				if len(blockIfMatchRules) > 0 {
+					for _, regxRuleCompile := range blockIfMatchRules {
+						if regxRuleCompile.MatchString(queryStr) {
+							MetricsQueryMatchBlockedTotal.Inc()
+							return PredictProhibit
+						}
+					}
+				}
+				if len(blockIfNotMatchRules) > 0 {
+					for _, regxRuleCompile := range blockIfNotMatchRules {
+						if !regxRuleCompile.MatchString(queryStr) {
+							MetricsQueryNotMatchBlockedTotal.Inc()
+							return PredictProhibit
+						}
+					}
+				}
+			}
+			return PredictContinue
+		})
 	}
 
-	if len(BlockIfMatchRules) == 0 && len(BlockIfNotMatchRules) == 0 {
+	if len(BlockPredicationFuncs) == 0 {
 		queryBlockEnabled = false
-		ShouldBlockQuery = func(string) bool {
+		logger.Infof("blockedQueries is empty, skip load")
+	} else {
+		queryBlockEnabled = true
+		ShouldBlockQuery = func(queryStr string) bool {
+			for _, predicationFunc := range BlockPredicationFuncs {
+				switch predicationFunc(queryStr) {
+				case PredictPass:
+					return false
+				case PredictProhibit:
+					return true
+				default:
+					continue
+				}
+			}
 			return false
 		}
-	}
-
-	queryBlockEnabled = true
-	ShouldBlockQuery = func(queryStr string) bool {
-		for _, matchRule := range BlockIfMatchRules {
-			// 必须匹配规则，否则屏蔽（返回 true）
-			if matchRule.Match([]byte(queryStr)) {
-				MetricsMatchBlockedTotal.Inc()
-				return true
-			}
-		}
-		for _, blockRule := range BlockIfNotMatchRules {
-			// 只要符合 blockRule，则屏蔽（返回 true)
-			if !blockRule.Match([]byte(queryStr)) {
-				MetricsNotMatchBlockedTotal.Inc()
-				return true
-			}
-		}
-		return false
 	}
 }
