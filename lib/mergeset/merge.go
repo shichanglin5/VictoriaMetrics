@@ -100,6 +100,21 @@ func (bsm *blockStreamMerger) Init(bsrs []*blockStreamReader, prepareBlock Prepa
 
 var errForciblyStopped = fmt.Errorf("forcibly stopped")
 
+//var (
+//	// Prefix for Date->MetricID entries.
+//	nsPrefixDateToMetricID byte = '5'
+//
+//	// Prefix for (Date,Tag)->MetricID entries.
+//	nsPrefixDateTagToMetricIDs byte = '6'
+//
+//	// Prefix for (Date,MetricName)->TSID entries.
+//	nsPrefixDateMetricNameToTSID byte = '7'
+//)
+//
+//func isDateIdx(t byte) bool {
+//	return t == nsPrefixDateToMetricID || t == nsPrefixDateTagToMetricIDs || t == nsPrefixDateMetricNameToTSID
+//}
+
 func (bsm *blockStreamMerger) Merge(bsw *blockStreamWriter, ph *partHeader, stopCh <-chan struct{}, itemsMerged *atomic.Uint64) error {
 again:
 	if len(bsm.bsrHeap) == 0 {
@@ -132,6 +147,7 @@ again:
 		lastItem := items[len(items)-1].String(data)
 		compareEveryItem = hasNextItem && lastItem > nextItem
 	}
+	//todo: 增加 prefix + date + tenantId 的过滤逻辑
 	for bsr.currItemIdx < len(items) {
 		item := items[bsr.currItemIdx].Bytes(data)
 		if compareEveryItem && string(item) > nextItem {
