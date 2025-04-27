@@ -24,10 +24,9 @@ var (
 )
 
 var (
-	configLoader func(data []byte) error
-	configData   atomic.Pointer[[]byte]
-	stopCh       chan struct{}
-	configWg     sync.WaitGroup
+	configData atomic.Pointer[[]byte]
+	stopCh     chan struct{}
+	configWg   sync.WaitGroup
 
 	configReloads      = metrics.NewCounter(`vm_runtime_config_last_reload_total`)
 	configReloadErrors = metrics.NewCounter(`vm_runtime_config_last_reload_errors_total`)
@@ -37,14 +36,13 @@ var (
 
 var Noop context.CancelFunc = func() {}
 
-func LoadConfig(runtimeConfigLoader func(data []byte) error) (context.CancelFunc, error) {
+func LoadConfig(configParser func(data []byte) error) (context.CancelFunc, error) {
 	if len(*configPath) == 0 {
 		return Noop, nil
 	}
 
-	configLoader = runtimeConfigLoader
 	sighupCh := procutil.NewSighupChan()
-	_, err := loadConfig()
+	_, err := loadConfig(configParser)
 	if err != nil {
 		logger.Fatalf("cannot load auth config: %s", err)
 	}
@@ -56,12 +54,12 @@ func LoadConfig(runtimeConfigLoader func(data []byte) error) (context.CancelFunc
 	configWg.Add(1)
 	go func() {
 		defer configWg.Done()
-		configReloader(sighupCh)
+		reloadConfig(sighupCh, configParser)
 	}()
 	return stopReloadConfig, nil
 }
 
-func loadConfig() (bool, error) {
+func loadConfig(parser func(data []byte) error) (bool, error) {
 	data, err := fscore.ReadFileOrHTTP(*configPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to read -auth.config=%q: %w", *configPath, err)
@@ -73,7 +71,8 @@ func loadConfig() (bool, error) {
 		return false, nil
 	}
 
-	err = configLoader(data)
+	logger.Infof("runtime.config:\n%s", string(data))
+	err = parser(data)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse -auth.config=%q: %w", *configPath, err)
 	}
@@ -88,7 +87,7 @@ func stopReloadConfig() {
 	logger.Infof("stopped config reloader")
 }
 
-func configReloader(sighupCh <-chan os.Signal) {
+func reloadConfig(sighupCh <-chan os.Signal, parser func(data []byte) error) {
 	var refreshCh <-chan time.Time
 	// initialize auth refresh interval
 	if *configCheckInterval > 0 {
@@ -99,9 +98,9 @@ func configReloader(sighupCh <-chan os.Signal) {
 
 	updateFn := func() {
 		configReloads.Inc()
-		updated, err := loadConfig()
+		updated, err := loadConfig(parser)
 		if err != nil {
-			logger.Errorf("failed to load auth config; using the last successfully loaded config; error: %s", err)
+			logger.Errorf("failed to load runtime config; using the last successfully loaded config; error: %s", err)
 			configSuccess.Set(0)
 			configReloadErrors.Inc()
 			return
@@ -109,7 +108,7 @@ func configReloader(sighupCh <-chan os.Signal) {
 		configSuccess.Set(1)
 		if updated {
 			configTimestamp.Set(fasttime.UnixTimestamp())
-			logger.Infof("successfully reloaded auth config")
+			logger.Infof("successfully reloaded runtime config")
 		}
 	}
 
