@@ -810,7 +810,7 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Token, w
 	if len(query) > maxQueryLen.IntN() {
 		return fmt.Errorf("too long query; got %d bytes; mustn't exceed `-search.maxQueryLen=%d` bytes", len(query), maxQueryLen.N)
 	}
-	if config.IsQueryBlocked(query) {
+	if config.ShouldBlockQuery(query) {
 		return config.ErrBlockedQuery
 	}
 	etfs, err := searchutils.GetExtraTagFilters(r)
@@ -984,7 +984,7 @@ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
 	if len(query) > maxQueryLen.IntN() {
 		return fmt.Errorf("too long query; got %d bytes; mustn't exceed `-search.maxQueryLen=%d` bytes", len(query), maxQueryLen.N)
 	}
-	if config.IsQueryBlocked(query) {
+	if config.ShouldBlockQuery(query) {
 		return config.ErrBlockedQuery
 	}
 	if start > end {

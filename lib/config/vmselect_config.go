@@ -3,13 +3,13 @@ package config
 import (
 	"context"
 	"errors"
+	"regexp"
 
 	//"errors"
 	"fmt"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/metrics"
 	"gopkg.in/yaml.v3"
-	"strings"
 	"sync/atomic"
 )
 
@@ -21,6 +21,7 @@ var (
 	ContainsBlockedTotal = metrics.NewCounter(`vmselect_contains_query_blocked_total`)
 )
 var ErrBlockedQuery = errors.New("query is blocked! contact administator for more information")
+var ShouldBlockQuery func(string) bool
 
 type Labels map[string]struct{}
 
@@ -35,10 +36,8 @@ type VMSelectConfig struct {
 }
 
 type BlockedQueries struct {
-	BlockIfEquals   []string `yaml:"blockIfEquals,omitempty"`
-	BlockIfContains []string `yaml:"blockIfContains,omitempty"`
-	LogIfEquals     []string `yaml:"logIfEquals,omitempty"`
-	LogIfContains   []string `yaml:"logIfContains,omitempty"`
+	BlockIfMatch    []string `yaml:"blockIfMatch,omitempty"`
+	BlockIfNotMatch []string `yaml:"blockIfNotMatch,omitempty"`
 }
 
 func InitVMSelectConfig() (context.CancelFunc, error) {
@@ -57,54 +56,68 @@ func InitVMSelectConfig() (context.CancelFunc, error) {
 			VMSelectTreatDotsAsIsLabels.Store(&treatDotsAsIsLabelsMaps)
 		}
 
+		// 加载 block query 规则
+		loadQueryBlockRules(c.BlockedQueries)
+
 		// 设置 VMSelectConfigVar
 		VMSelectConfigVar.Store(&c)
 		return nil
 	})
 }
 
-func IsQueryBlocked(query string) bool {
-	c := VMSelectConfigVar.Load()
-	if c == nil {
-		return false
+func loadQueryBlockRules(blockRules *BlockedQueries) {
+	if blockRules == nil {
+		logger.Infof("blockedQueries is empty, skip load")
+		ShouldBlockQuery = func(string) bool {
+			return false
+		}
+		return
 	}
-	if c.BlockedQueries != nil {
-		blockQueryIfEquals := c.BlockedQueries.BlockIfEquals
-		if len(blockQueryIfEquals) > 0 {
-			for _, blockedQuery := range blockQueryIfEquals {
-				if query == blockedQuery {
-					EqualBlockedTotal.Inc()
-					logger.Infof("blockedQueries: block query [equals]: %s", query)
-					return true
-				}
+	BlockIfMatchRules := make([]*regexp.Regexp, 0)
+	if blockRules.BlockIfMatch != nil {
+		for _, regxRule := range blockRules.BlockIfMatch {
+			compile, err := regexp.Compile(regxRule)
+			if err != nil {
+				logger.Warnf("cannot compile regular expression %q: %s", regxRule, err)
+				continue
 			}
-		}
-		blockQueryIfContains := c.BlockedQueries.BlockIfContains
-		if len(blockQueryIfContains) > 0 {
-			for _, blockedQuery := range blockQueryIfContains {
-				if strings.Contains(query, blockedQuery) {
-					ContainsBlockedTotal.Inc()
-					logger.Infof("blockedQueries: block query [contains]: %s", query)
-					return true
-				}
-			}
-		}
-		logIfEquals := c.BlockedQueries.LogIfEquals
-		if len(logIfEquals) > 0 {
-			for _, logQuery := range logIfEquals {
-				if query == logQuery {
-					logger.Infof("blockedQueries: log query [equals]: %s", query)
-				}
-			}
-		}
-		logIfContains := c.BlockedQueries.LogIfContains
-		if len(logIfContains) > 0 {
-			for _, logQuery := range logIfContains {
-				if strings.Contains(query, logQuery) {
-					logger.Infof("blockedQueries: log query [contains]: %s", query)
-				}
+			if compile != nil {
+				BlockIfMatchRules = append(BlockIfMatchRules, compile)
 			}
 		}
 	}
-	return false
+	BlockIfNotMatchRules := make([]*regexp.Regexp, 0)
+	if blockRules.BlockIfNotMatch != nil {
+		for _, regxRule := range blockRules.BlockIfNotMatch {
+			compile, err := regexp.Compile(regxRule)
+			if err != nil {
+				logger.Warnf("cannot compile regular expression %q: %s", regxRule, err)
+				continue
+			}
+			if compile != nil {
+				BlockIfNotMatchRules = append(BlockIfNotMatchRules, compile)
+			}
+		}
+	}
+	if len(BlockIfMatchRules) > 0 || len(BlockIfNotMatchRules) > 0 {
+		ShouldBlockQuery = func(queryStr string) bool {
+			for _, matchRule := range BlockIfMatchRules {
+				// 必须匹配规则，否则屏蔽（返回 true）
+				if matchRule.Match([]byte(queryStr)) {
+					return true
+				}
+			}
+			for _, blockRule := range BlockIfNotMatchRules {
+				// 只要符合 blockRule，则屏蔽（返回 true)
+				if !blockRule.Match([]byte(queryStr)) {
+					return true
+				}
+			}
+			return false
+		}
+	} else {
+		ShouldBlockQuery = func(string) bool {
+			return false
+		}
+	}
 }
