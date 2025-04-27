@@ -780,7 +780,7 @@ func isGraphiteTagsPath(path string) bool {
 }
 
 func sendPrometheusError(w http.ResponseWriter, r *http.Request, err error) {
-	if !errors.Is(err, config.ErrBlockedQuery) {
+	if strings.Contains(err.Error(), config.ErrBlockedQuery.Error()) {
 		logger.WarnfSkipframes(1, "remoteAddr: %s, error in %q: %s", httpserver.GetQuotedRemoteAddr(r), httpserver.GetRequestURI(r), err)
 	}
 
