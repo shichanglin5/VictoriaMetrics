@@ -10,4 +10,3 @@ EXPOSE 8481
 ENTRYPOINT ["/vmselect-prod"]
 ARG TARGETARCH
 COPY vmselect-linux-${TARGETARCH}-prod ./vmselect-prod
-COPY dlv /dlv

@@ -17,8 +17,16 @@ var (
 	VMSelectConfigVar           = atomic.Pointer[VMSelectConfig]{}
 	VMSelectTreatDotsAsIsLabels = atomic.Pointer[Labels]{}
 
-	EqualBlockedTotal    = metrics.NewCounter(`vmselect_equal_query_blocked_total`)
-	ContainsBlockedTotal = metrics.NewCounter(`vmselect_contains_query_blocked_total`)
+	queryBlockEnabled = false
+	_                 = metrics.NewGauge("vmselect_query_blocked_enabled", func() float64 {
+		if queryBlockEnabled {
+			return 1
+		} else {
+			return 0
+		}
+	})
+	MetricsMatchBlockedTotal    = metrics.NewCounter(`vmselect_match_query_blocked_total`)
+	MetricsNotMatchBlockedTotal = metrics.NewCounter(`vmselect_notmatch_query_blocked_total`)
 )
 var ErrBlockedQuery = errors.New("query is blocked! contact administator for more information")
 var ShouldBlockQuery func(string) bool
@@ -67,6 +75,7 @@ func InitVMSelectConfig() (context.CancelFunc, error) {
 
 func loadQueryBlockRules(blockRules *BlockedQueries) {
 	if blockRules == nil {
+		queryBlockEnabled = false
 		logger.Infof("blockedQueries is empty, skip load")
 		ShouldBlockQuery = func(string) bool {
 			return false
@@ -99,25 +108,30 @@ func loadQueryBlockRules(blockRules *BlockedQueries) {
 			}
 		}
 	}
-	if len(BlockIfMatchRules) > 0 || len(BlockIfNotMatchRules) > 0 {
-		ShouldBlockQuery = func(queryStr string) bool {
-			for _, matchRule := range BlockIfMatchRules {
-				// 必须匹配规则，否则屏蔽（返回 true）
-				if matchRule.Match([]byte(queryStr)) {
-					return true
-				}
-			}
-			for _, blockRule := range BlockIfNotMatchRules {
-				// 只要符合 blockRule，则屏蔽（返回 true)
-				if !blockRule.Match([]byte(queryStr)) {
-					return true
-				}
-			}
-			return false
-		}
-	} else {
+
+	if len(BlockIfMatchRules) == 0 && len(BlockIfNotMatchRules) == 0 {
+		queryBlockEnabled = false
 		ShouldBlockQuery = func(string) bool {
 			return false
 		}
+	}
+
+	queryBlockEnabled = true
+	ShouldBlockQuery = func(queryStr string) bool {
+		for _, matchRule := range BlockIfMatchRules {
+			// 必须匹配规则，否则屏蔽（返回 true）
+			if matchRule.Match([]byte(queryStr)) {
+				MetricsMatchBlockedTotal.Inc()
+				return true
+			}
+		}
+		for _, blockRule := range BlockIfNotMatchRules {
+			// 只要符合 blockRule，则屏蔽（返回 true)
+			if !blockRule.Match([]byte(queryStr)) {
+				MetricsNotMatchBlockedTotal.Inc()
+				return true
+			}
+		}
+		return false
 	}
 }

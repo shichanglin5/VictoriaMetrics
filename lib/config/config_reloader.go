@@ -74,6 +74,7 @@ func loadConfig() (bool, error) {
 	}
 
 	err = configLoader(data)
+	logger.Infof("loaded config from %q\n%s", *configPath, data)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse -auth.config=%q: %w", *configPath, err)
 	}
