@@ -70,6 +70,20 @@ func TestRegxMatch(t *testing.T) {
 			},
 		},
 		{
+			reverse: false,
+			regex:   "app_uk",
+			testStrs: []string{
+				"{app_uk=~'demo.uk'}",
+			},
+		},
+		{
+			reverse: true,
+			regex:   "app_uk",
+			testStrs: []string{
+				"{app_ul=~'demo.uk'}",
+			},
+		},
+		{
 			reverse: true,
 			regex:   "app_uk\\s*=~\\s*['\"]{1}\\.\\*['\"]{1}",
 			testStrs: []string{
