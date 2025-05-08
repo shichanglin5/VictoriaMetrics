@@ -7,7 +7,13 @@ BUILDINFO_TAG ?= $(shell echo $$(git describe --long --all | tr '/' '-')$$( \
 	      git diff-index --quiet HEAD -- || echo '-dirty-'$$(git diff-index -u HEAD | openssl sha1 | cut -d' ' -f2 | cut -c 1-8)))
 LATEST_TAG ?= latest
 
-PKG_TAG ?= $(shell sh -c 'git describe --tags --exact-match 2>/dev/null >/dev/null && echo $$(git describe --tags --exact-match)-$$(git rev-parse --short HEAD) || git rev-parse --short HEAD')
+PKG_TAG ?= $(shell \
+  TAG=$$(git describe --tags --abbrev=0); \
+  COMMIT=$$(git rev-parse --short HEAD); \
+  DATE=$$(git show -s --date=format:'%Y%m%d' --format=%cd); \
+  DIRTY=$$(git diff --quiet || echo -dirty); \
+  echo $$TAG-$$COMMIT-$$DATE$$DIRTY \
+)
 ifeq ($(PKG_TAG),)
 PKG_TAG := $(BUILDINFO_TAG)
 endif
