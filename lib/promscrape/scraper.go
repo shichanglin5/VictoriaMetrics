@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,9 @@ func CheckConfig() error {
 //
 // Scraped data is passed to pushData.
 func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
+	if noScrapeConfig() {
+		return
+	}
 	mustInitClusterMemberID()
 	globalStopChan = make(chan struct{})
 	scraperWG.Add(1)
@@ -73,8 +77,15 @@ func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
 
 // Stop stops Prometheus scraper.
 func Stop() {
+	if noScrapeConfig() {
+		return
+	}
 	close(globalStopChan)
 	scraperWG.Wait()
+}
+
+func noScrapeConfig() bool {
+	return *promscrapeConfigFile == "" && !mts.IsVmAgentType()
 }
 
 var (
@@ -99,22 +110,48 @@ func WriteConfigData(w io.Writer) {
 }
 
 func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest), globalStopCh <-chan struct{}) {
-	if configFile == "" {
-		// Nothing to scrape.
-		return
-	}
-
 	metrics.RegisterSet(configMetricsSet)
 
-	// Register SIGHUP handler for config reload before loadConfig.
-	// This guarantees that the config will be re-read if the signal arrives just after loadConfig.
+	// Register SIGHUP handler for config reload before loadMtsConfig.
+	// This guarantees that the config will be re-read if the signal arrives just after loadMtsConfig.
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1240
 	sighupCh := procutil.NewSighupChan()
 
 	logger.Infof("reading scrape configs from %q", configFile)
-	cfg, err := loadConfig(configFile)
+	var doLoadConfig func(configFile string) (*Config, error)
+	if mts.IsVmAgentType() {
+		doLoadConfig = loadScrapeConfig
+	} else {
+		doLoadConfig = loadConfig
+	}
+	cfg, err := doLoadConfig(configFile)
 	if err != nil {
-		logger.Fatalf("cannot read %q: %s", configFile, err)
+		if !IsScrapeInitErr(err) {
+			logger.Fatalf("load config failed: %v", err)
+		}
+		ticker := time.NewTicker(2 * time.Second)
+		// mts 配置加载可能需要等待 scrap group 初始化
+		for _ = range 5 {
+			logger.Warnf("mts pull targets retry: %v", err)
+			select {
+			case <-globalStopChan:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				cfg, err = doLoadConfig(configFile)
+				if IsScrapeInitErr(err) {
+					continue
+				}
+			}
+			if err == nil {
+				logger.Infof("mts pull targets success")
+				break
+			}
+		}
+		ticker.Stop()
+		if err != nil {
+			logger.Fatalf("mts pull targets retry failed: %s", err)
+		}
 	}
 	marshaledData := cfg.marshal()
 	configData.Store(&marshaledData)
@@ -157,7 +194,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 		select {
 		case <-sighupCh:
 			logger.Infof("SIGHUP received; reloading Prometheus configs from %q", configFile)
-			cfgNew, err := loadConfig(configFile)
+			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
@@ -165,6 +202,9 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 				goto waitForChans
 			}
 			configSuccess.Set(1)
+			if cfgNew == nil {
+				goto waitForChans
+			}
 			if !cfgNew.mustRestart(cfg) {
 				logger.Infof("nothing changed in %q", configFile)
 				goto waitForChans
@@ -175,7 +215,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 			configReloads.Inc()
 			configTimestamp.Set(fasttime.UnixTimestamp())
 		case <-tickerCh:
-			cfgNew, err := loadConfig(configFile)
+			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
@@ -183,6 +223,9 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 				goto waitForChans
 			}
 			configSuccess.Set(1)
+			if cfgNew == nil {
+				goto waitForChans
+			}
 			if !cfgNew.mustRestart(cfg) {
 				goto waitForChans
 			}

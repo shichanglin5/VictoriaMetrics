@@ -1,4 +1,4 @@
-ARG go_builder_image
+ARG go_builder_image=golang:1.23.0-alpine
 FROM $go_builder_image
 STOPSIGNAL SIGINT
 RUN apk add git gcc musl-dev make wget --no-cache && \

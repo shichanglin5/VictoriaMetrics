@@ -2,6 +2,7 @@ package promscrape
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -23,6 +24,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompbmarshal"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promrelabel"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutils"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	parser "github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus/stream"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/proxy"
@@ -95,7 +97,8 @@ type ScrapeWork struct {
 	// See also https://prometheus.io/docs/concepts/jobs_instances/
 	//
 	// Labels are sorted by name.
-	Labels *promutils.Labels
+	Labels         *promutils.Labels
+	AutoMetricTags []prometheus.Tag
 
 	// ExternalLabels contains labels from global->external_labels section of -promscrape.config
 	//
@@ -169,12 +172,12 @@ func (sw *ScrapeWork) key() string {
 		"ExternalLabels=%s, "+
 		"ProxyURL=%s, ProxyAuthConfig=%s, AuthConfig=%s, MetricRelabelConfigs=%q, "+
 		"SampleLimit=%d, DisableCompression=%v, DisableKeepAlive=%v, StreamParse=%v, "+
-		"ScrapeAlignInterval=%s, ScrapeOffset=%s, SeriesLimit=%d, NoStaleMarkers=%v",
+		"ScrapeAlignInterval=%s, ScrapeOffset=%s, SeriesLimit=%d, NoStaleMarkers=%v, AuthToken=%s",
 		sw.jobNameOriginal, sw.ScrapeURL, sw.ScrapeInterval, sw.ScrapeTimeout, sw.HonorLabels, sw.HonorTimestamps, sw.DenyRedirects, sw.Labels.String(),
 		sw.ExternalLabels.String(),
 		sw.ProxyURL.String(), sw.ProxyAuthConfig.String(), sw.AuthConfig.String(), sw.MetricRelabelConfigs.String(),
 		sw.SampleLimit, sw.DisableCompression, sw.DisableKeepAlive, sw.StreamParse,
-		sw.ScrapeAlignInterval, sw.ScrapeOffset, sw.SeriesLimit, sw.NoStaleMarkers)
+		sw.ScrapeAlignInterval, sw.ScrapeOffset, sw.SeriesLimit, sw.NoStaleMarkers, sw.AuthToken.String())
 	return key
 }
 
@@ -470,7 +473,10 @@ func (sw *scrapeWork) processDataOneShot(scrapeTimestamp, realTimestamp int64, b
 		up = 0
 		scrapesFailed.Inc()
 	} else {
-		wc.rows.UnmarshalWithErrLogger(bodyString, sw.logError)
+		wc.rows.UnmarshalWithErrLogger(bodyString, func(s string) {
+			sw.logError(s)
+			err = errors.New(s)
+		})
 	}
 	srcRows := wc.rows.Rows
 	samplesScraped := len(srcRows)
@@ -865,7 +871,7 @@ func (sw *scrapeWork) addAutoMetrics(am *autoMetrics, wc *writeRequestCtx, times
 		sw.addAutoTimeseries(wc, "scrape_series_limit", float64(sl.MaxItems()), timestamp)
 	}
 	sw.addAutoTimeseries(wc, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
-	sw.addAutoTimeseries(wc, "up", float64(am.up), timestamp)
+	sw.addAutoTimeseries(wc, "target_up", float64(am.up), timestamp)
 }
 
 // addAutoTimeseries adds automatically generated time series with the given name, value and timestamp.
@@ -873,7 +879,7 @@ func (sw *scrapeWork) addAutoMetrics(am *autoMetrics, wc *writeRequestCtx, times
 // See https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series
 func (sw *scrapeWork) addAutoTimeseries(wc *writeRequestCtx, name string, value float64, timestamp int64) {
 	sw.tmpRow.Metric = name
-	sw.tmpRow.Tags = nil
+	sw.tmpRow.Tags = sw.Config.AutoMetricTags
 	sw.tmpRow.Value = value
 	sw.tmpRow.Timestamp = timestamp
 	sw.addRowToTimeseries(wc, &sw.tmpRow, timestamp, false)

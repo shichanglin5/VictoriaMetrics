@@ -181,6 +181,35 @@ func newHTTPClient(argIdx int, remoteWriteURL, sanitizedURL string, fq *persiste
 	return c
 }
 
+// newTenantHTTPClient 用于 mts 配置场景
+func newTenantHTTPClient(tenantHeader string, remoteWriteURL, sanitizedURL string, fq *persistentqueue.FastQueue, concurrency int) *client {
+	opts := &promauth.Options{
+		Headers: []string{tenantHeader},
+	}
+	authCfg, _ := opts.NewConfig()
+	tr := &http.Transport{
+		DialContext:         netutil.NewStatDialFunc("vmagent_remotewrite"),
+		MaxConnsPerHost:     2 * concurrency,
+		MaxIdleConnsPerHost: 2 * concurrency,
+		IdleConnTimeout:     time.Minute,
+		WriteBufferSize:     64 * 1024,
+	}
+	hc := &http.Client{
+		Transport: authCfg.NewRoundTripper(tr),
+	}
+	c := &client{
+		sanitizedURL:   sanitizedURL,
+		remoteWriteURL: remoteWriteURL,
+		authCfg:        authCfg,
+		fq:             fq,
+		hc:             hc,
+		stopCh:         make(chan struct{}),
+		useVMProto:     true,
+	}
+	c.sendBlock = c.sendBlockHTTP
+	return c
+}
+
 func (c *client) init(argIdx, concurrency int, sanitizedURL string) {
 	limitReached := metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_rate_limit_reached_total{url=%q}`, c.sanitizedURL))
 	if bytesPerSec := rateLimit.GetOptionalArg(argIdx); bytesPerSec > 0 {
@@ -450,8 +479,8 @@ again:
 				"failed to read response body: %s",
 				len(block), c.sanitizedURL, statusCode, err)
 		} else {
-			remoteWriteRejectedLogger.Errorf("sending a block with size %d bytes to %q was rejected (skipping the block): status code %d; response body: %s",
-				len(block), c.sanitizedURL, statusCode, string(body))
+			remoteWriteRejectedLogger.Errorf("sending a block with size %d bytes to %q was rejected (skipping the block): request headers:%v; status code %d; response body: %s",
+				len(block), c.sanitizedURL, c.authCfg.HeadersNoAuthString(), statusCode, string(body))
 		}
 		// Just drop block on 409 and 400 status codes like Prometheus does.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/873

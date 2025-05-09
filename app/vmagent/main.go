@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"io"
 	"net/http"
 	"os"
@@ -128,6 +129,7 @@ func main() {
 	}
 	logger.Infof("starting vmagent at %q...", listenAddrs)
 	startTime := time.Now()
+	mts.Init()
 	remotewrite.StartIngestionRateLimiter()
 	remotewrite.Init()
 	common.StartUnmarshalWorkers()
@@ -157,7 +159,6 @@ func main() {
 	sig := procutil.WaitForSigterm()
 	logger.Infof("received signal %s", sig)
 	remotewrite.StopIngestionRateLimiter()
-	pushmetrics.Stop()
 
 	startTime = time.Now()
 	logger.Infof("gracefully shutting down webservice at %q", listenAddrs)
@@ -167,6 +168,7 @@ func main() {
 	logger.Infof("successfully shut down the webservice in %.3f seconds", time.Since(startTime).Seconds())
 
 	promscrape.Stop()
+	pushmetrics.Stop()
 
 	if len(*influxListenAddr) > 0 {
 		influxServer.MustStop()
@@ -235,6 +237,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 			{"metric-relabel-debug", "debug metric relabeling"},
 			{"api/v1/targets", "advanced information about discovered targets in JSON format"},
 			{"config", "-promscrape.config contents"},
+			{"mtsConfig", "mts config contents"},
 			{"metrics", "available service metrics"},
 			{"flags", "command-line flags"},
 			{"-/reload", "reload configuration"},
@@ -244,8 +247,12 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 
 	path := strings.Replace(r.URL.Path, "//", "/", -1)
 	if strings.HasPrefix(path, "/prometheus/api/v1/import/prometheus") || strings.HasPrefix(path, "/api/v1/import/prometheus") {
+		authToken := getAuthToken(w, r)
+		if authToken == nil {
+			return true
+		}
 		prometheusimportRequests.Inc()
-		if err := prometheusimport.InsertHandler(nil, r); err != nil {
+		if err := prometheusimport.InsertHandler(authToken, r); err != nil {
 			prometheusimportErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -270,8 +277,12 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		if common.HandleVMProtoServerHandshake(w, r) {
 			return true
 		}
+		authToken := getAuthToken(w, r)
+		if authToken == nil {
+			return true
+		}
 		prometheusWriteRequests.Inc()
-		if err := promremotewrite.InsertHandler(nil, r); err != nil {
+		if err := promremotewrite.InsertHandler(authToken, r); err != nil {
 			prometheusWriteErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -447,6 +458,14 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		promscrape.WriteConfigData(w)
 		return true
+	case "/mtsConfig":
+		if !httpserver.CheckAuthFlag(w, r, configAuthKey) {
+			return true
+		}
+		promscrapeConfigRequests.Inc()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		promscrape.WriteMtsConfigData(w)
+		return true
 	case "/prometheus/api/v1/status/config", "/api/v1/status/config":
 		// See https://prometheus.io/docs/prometheus/latest/querying/api/#config
 		if !httpserver.CheckAuthFlag(w, r, configAuthKey) {
@@ -486,6 +505,20 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return false
 	}
+}
+
+func getAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
+	tenant := r.Header.Get("X-Scope-OrgID")
+	if len(tenant) == 0 {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	}
+	authToken, ok := remotewrite.TenantToAuthToken.Load(tenant)
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil
+	}
+	return authToken.(*auth.Token)
 }
 
 func processMultitenantRequest(w http.ResponseWriter, r *http.Request, path string) bool {

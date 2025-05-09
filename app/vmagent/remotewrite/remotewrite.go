@@ -3,6 +3,7 @@ package remotewrite
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -43,6 +44,7 @@ var (
 		"https://docs.victoriametrics.com/cluster-victoriametrics/#url-format . By default incoming data is processed via single-node insert handlers "+
 		"according to https://docs.victoriametrics.com/#how-to-import-time-series-data ."+
 		"See https://docs.victoriametrics.com/vmagent/#multitenancy for details")
+	tenantFastQueueIsolation = flag.Bool("tenantFastQueueIsolation", true, "whether to isolate fast queues for each tenant. ")
 
 	shardByURL = flag.Bool("remoteWrite.shardByURL", false, "Whether to shard outgoing series across all the remote storage systems enumerated via -remoteWrite.url . "+
 		"By default the data is replicated across all the -remoteWrite.url . See https://docs.victoriametrics.com/vmagent/#sharding-among-remote-storages . "+
@@ -122,6 +124,10 @@ func MultitenancyEnabled() bool {
 	return *enableMultitenantHandlers
 }
 
+func TenantFastQueueIsolationEnabled() bool {
+	return *tenantFastQueueIsolation
+}
+
 // Contains the current relabelConfigs.
 var allRelabelConfigs atomic.Pointer[relabelConfigs]
 
@@ -150,15 +156,20 @@ var (
 	shardByURLIgnoreLabelsMap map[string]struct{}
 )
 
+var (
+	overrideDefault = false
+)
+
 // Init initializes remotewrite.
 //
 // It must be called after flag.Parse().
 //
 // Stop must be called for graceful shutdown.
 func Init() {
-	if len(*remoteWriteURLs) == 0 {
-		logger.Fatalf("at least one `-remoteWrite.url` command-line flag must be set")
+	if mts.IsVmAgentOrPushGatewayType() {
+		overrideDefault = true
 	}
+
 	if *maxHourlySeries > 0 {
 		hourlySeriesLimiter = bloomfilter.NewLimiter(*maxHourlySeries, time.Hour)
 		_ = metrics.NewGauge(`vmagent_hourly_series_limit_max_series`, func() float64 {
@@ -209,7 +220,11 @@ func Init() {
 
 	initStreamAggrConfigGlobal()
 
-	rwctxsGlobal = newRemoteWriteCtxs(nil, *remoteWriteURLs)
+	if overrideDefault {
+		//reloadMtsConfig()
+	} else {
+		rwctxsGlobal = newRemoteWriteCtxs(nil, *remoteWriteURLs)
+	}
 
 	disableOnDiskQueues := []bool(*disableOnDiskQueue)
 	disableOnDiskQueueAny = slices.Contains(disableOnDiskQueues, true)
@@ -322,10 +337,187 @@ func newRemoteWriteCtxs(at *auth.Token, urls []string) []*remoteWriteCtx {
 			sanitizedURL = fmt.Sprintf("%s:%d:%d", sanitizedURL, at.AccountID, at.ProjectID)
 		}
 		if *showRemoteWriteURL {
-			sanitizedURL = fmt.Sprintf("%d:%s", i+1, remoteWriteURL)
+			if overrideDefault {
+				sanitizedURL = fmt.Sprintf("%s", remoteWriteURL)
+			} else {
+				sanitizedURL = fmt.Sprintf("%d:%s", i+1, remoteWriteURL)
+			}
 		}
 		rwctxs[i] = newRemoteWriteCtx(i, remoteWriteURL, maxInmemoryBlocks, sanitizedURL)
 	}
+	return rwctxs
+}
+
+var (
+	// remoteWriteCtxsMapping rwxKey -> *remoteWriteCtx
+	remoteWriteCtxsMapping = &sync.Map{}
+
+	// AuthTokenToRwctxs authToken(string) -> []*remoteWriteCtx
+	AuthTokenToRwctxs = &sync.Map{}
+
+	// AuthTokenToTenant authToken(string) -> tenant(string)
+	AuthTokenToTenant = &sync.Map{}
+
+	// TenantToAuthToken tenant(string) -> authToken(*auth.Token)
+	TenantToAuthToken = &sync.Map{}
+)
+
+// ReloadRemoteWriteCtxs mts 配置更新时动态创建 remote write ctx
+// 判断是否需要重新更新：
+// 1、tenant -> token 是否变化
+// 2、token -> tenant 是否变化
+// 3、cluster urls 是否变化
+func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string, tenantToIdcs map[string]map[string]struct{}) []*remoteWriteCtx {
+	maxInmemoryBlocks := memory.Allowed() / len(newTenantToAuthTokens) / *maxRowsPerBlock / 100
+	if maxInmemoryBlocks / *queues > 100 {
+		// There is no much sense in keeping higher number of blocks in memory,
+		// since this means that the producer outperforms consumer and the queue
+		// will continue growing. It is better storing the queue to file.
+		maxInmemoryBlocks = 100 * *queues
+	}
+	if maxInmemoryBlocks < 2 {
+		maxInmemoryBlocks = 2
+	}
+	rwctxs := make([]*remoteWriteCtx, 0)
+
+	newRemoteWriteCtxsMapping := &sync.Map{}
+	newAuthTokenToRwctxs := &sync.Map{}
+	newTenantToAuthToken := &sync.Map{}
+	newAuthTokenToTenant := &sync.Map{}
+
+	shouldReload := false
+	for tenantName, tenantToken := range newTenantToAuthTokens {
+		newToken, err := auth.NewToken(tenantToken)
+		if err != nil {
+			mts.MtsWarningMetrics.Inc()
+			logger.Errorf("auth.NewToken(%s): %s", tenantName, err)
+			continue
+		}
+		// tenant -> authToken
+		newTenantToAuthToken.Store(tenantName, newToken)
+		// authToken -> tenant
+		newAuthTokenToTenant.Store(newToken.String(), tenantName)
+
+		// 遍历 urls 创建 remote write ctx
+		tenantRwctxs := make([]*remoteWriteCtx, 0)
+		for clusterIdc, clusterUrl := range clusterUrls {
+			// 当配置 tenant 要写的 idc 时，判断是否属于该 tenant 配置的 idc，不属于则跳过
+			if tenantIdcs, ok := tenantToIdcs[tenantName]; ok {
+				if _, ok := tenantIdcs[clusterIdc]; !ok {
+					continue
+				}
+			}
+
+			// 根据 {tenantName}-{idc} 生成 key，如果不存在，则创建新的 remote write ctx
+			rwxKey := fmt.Sprintf("%s_%s", clusterIdc, tenantName)
+			remoteWriteURL, err := url.Parse(clusterUrl)
+			if err != nil {
+				mts.MtsWarningMetrics.Inc()
+				logger.Warnf("invalid -remoteWrite.url=%q: %s", remoteWriteURL, err)
+				continue
+			}
+			sanitizedURL := fmt.Sprintf("%s@%s", rwxKey, clusterUrl)
+			if rwctx, ok := remoteWriteCtxsMapping.Load(rwxKey); !ok {
+				shouldReload = true
+				newRwctx := reloadRemoteWriteCtx(clusterIdc, tenantName, remoteWriteURL, maxInmemoryBlocks, sanitizedURL)
+				tenantRwctxs = append(tenantRwctxs, newRwctx)
+				newRemoteWriteCtxsMapping.Store(rwxKey, newRwctx)
+				rwctxs = append(rwctxs, newRwctx)
+			} else {
+				// 已存在，判断 clusterUrl 是否改变，如果改变了，则更新
+				oldRwctx := rwctx.(*remoteWriteCtx)
+				if oldRwctx.c.remoteWriteURL != remoteWriteURL.String() {
+					logger.Infof("remoteWriteURL changed (%s) from %s to %s", rwxKey, oldRwctx.c.remoteWriteURL, remoteWriteURL)
+					shouldReload = true
+					oldRwctx.c.remoteWriteURL = remoteWriteURL.String()
+				}
+				tenantRwctxs = append(tenantRwctxs, rwctx.(*remoteWriteCtx))
+				newRemoteWriteCtxsMapping.Store(rwxKey, oldRwctx)
+				rwctxs = append(rwctxs, oldRwctx)
+			}
+		}
+		newAuthTokenToRwctxs.Store(newToken.String(), tenantRwctxs)
+	}
+
+	// 找出清理 remote write ctx
+	toDeleteRWCtxs := make([]*remoteWriteCtx, 0)
+	remoteWriteCtxsMapping.Range(func(k, v interface{}) bool {
+		if _, ok := newRemoteWriteCtxsMapping.Load(k); !ok {
+			shouldReload = true
+			toDeleteRWCtxs = append(toDeleteRWCtxs, v.(*remoteWriteCtx))
+		}
+		return true
+	})
+
+	// 检查 tenant -> authToken 是否有变化
+	if !shouldReload {
+		TenantToAuthToken.Range(func(k, v any) bool {
+			if t, ok := newTenantToAuthToken.Load(k); !ok {
+				// 如果 tenant 删除，需要 reload
+				shouldReload = true
+			} else if t.(*auth.Token).String() != v.(*auth.Token).String() {
+				// 如果 tenant 对应的 authToken 改变，需要 reload
+				shouldReload = true
+			}
+			return true
+		})
+		newTenantToAuthToken.Range(func(k, v any) bool {
+			if _, ok := TenantToAuthToken.Load(k); !ok {
+				// 如果 tenant 删除，需要 reload
+				shouldReload = true
+			}
+			return true
+		})
+	}
+
+	// 检查 authToken -> tenant 是否有变化
+	if !shouldReload {
+		AuthTokenToTenantSize := 0
+		AuthTokenToTenant.Range(func(k, v any) bool {
+			AuthTokenToTenantSize++
+			if t, ok := newAuthTokenToTenant.Load(k); !ok {
+				// 如果 authToken 删除，需要 reload
+				shouldReload = true
+			} else if t != v.(string) {
+				// 如果 authToken 对应的 tenant 改变，需要 reload
+				shouldReload = true
+			}
+			return true
+		})
+		newAuthTokenToTenant.Range(func(k, v any) bool {
+			if _, ok := AuthTokenToTenant.Load(k); !ok {
+				// 如果 authToken 删除，需要 reload
+				shouldReload = true
+			}
+			return true
+		})
+	}
+
+	if !shouldReload {
+		return rwctxsGlobal
+	}
+
+	// 更新 authTokenToRwctxs
+	AuthTokenToRwctxs = newAuthTokenToRwctxs
+
+	// 更新 remoteWriteCtxsMapping
+	remoteWriteCtxsMapping = newRemoteWriteCtxsMapping
+
+	// 更新 TenantToAuthToken
+	TenantToAuthToken = newTenantToAuthToken
+
+	// 更新 AuthTokenToTenant
+	AuthTokenToTenant = newAuthTokenToTenant
+
+	// 清理 remote write ctx
+	for _, rwctx := range toDeleteRWCtxs {
+		logger.Infof("remove remoteWriteCtx: %s, url: %s", rwctx.fq.Dirname(), rwctx.c.remoteWriteURL)
+		rwctx.MustStop()
+	}
+
+	rwctxsGlobal = rwctxs
+	_ = remoteWriteURLs.Set("mts")
+	mts.FastQueueSize.Store(int64(len(rwctxsGlobal)))
 	return rwctxs
 }
 
@@ -417,7 +609,7 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	}
 
 	var tenantRctx *relabelCtx
-	if at != nil {
+	if at != nil && MultitenancyEnabled() && !TenantFastQueueIsolationEnabled() {
 		// Convert at to (vm_account_id, vm_project_id) labels.
 		tenantRctx = getRelabelCtx()
 		defer putRelabelCtx(tenantRctx)
@@ -426,7 +618,17 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	// Quick check whether writes to configured remote storage systems are blocked.
 	// This allows saving CPU time spent on relabeling and block compression
 	// if some of remote storage systems cannot keep up with the data ingestion rate.
-	rwctxs, ok := getEligibleRemoteWriteCtxs(tss, forceDropSamplesOnFailure)
+	var rwctxs []*remoteWriteCtx
+	var ok bool
+	if overrideDefault {
+		var v any
+		v, ok = AuthTokenToRwctxs.Load(at.String())
+		if ok {
+			rwctxs = v.([]*remoteWriteCtx)
+		}
+	} else {
+		rwctxs, ok = getEligibleRemoteWriteCtxs(tss, forceDropSamplesOnFailure)
+	}
 	if !ok {
 		// At least a single remote write queue is blocked and dropSamplesOnFailure isn't set.
 		// Return false to the caller, so it could re-send samples again.
@@ -783,7 +985,9 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
 	pqURL.RawQuery = ""
 	pqURL.Fragment = ""
 	h := xxhash.Sum64([]byte(pqURL.String()))
+
 	queuePath := filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%d_%016X", argIdx+1, h))
+
 	maxPendingBytes := maxPendingBytesPerURL.GetOptionalArg(argIdx)
 	if maxPendingBytes != 0 && maxPendingBytes < persistentqueue.DefaultChunkFileSize {
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/4195
@@ -831,6 +1035,70 @@ func newRemoteWriteCtx(argIdx int, remoteWriteURL *url.URL, maxInmemoryBlocks in
 
 	rwctx := &remoteWriteCtx{
 		idx: argIdx,
+		fq:  fq,
+		c:   c,
+		pss: pss,
+
+		rowsPushedAfterRelabel: metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_rows_pushed_after_relabel_total{path=%q,url=%q}`, queuePath, sanitizedURL)),
+		rowsDroppedByRelabel:   metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_relabel_metrics_dropped_total{path=%q,url=%q}`, queuePath, sanitizedURL)),
+
+		pushFailures:             metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_push_failures_total{path=%q,url=%q}`, queuePath, sanitizedURL)),
+		rowsDroppedOnPushFailure: metrics.GetOrCreateCounter(fmt.Sprintf(`vmagent_remotewrite_samples_dropped_total{path=%q,url=%q}`, queuePath, sanitizedURL)),
+	}
+	rwctx.initStreamAggrConfig()
+
+	return rwctx
+}
+
+// reloadRemoteWriteCtx 用于 mts 配置动态更新时，重新加载 remoteWriteCtx
+func reloadRemoteWriteCtx(clusterIdc, tenantName string, remoteWriteURL *url.URL, maxInmemoryBlocks int, sanitizedURL string) *remoteWriteCtx {
+	pqURL := *remoteWriteURL
+	pqURL.RawQuery = ""
+	pqURL.Fragment = ""
+	queuePath := filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%s_%s", clusterIdc, tenantName))
+	maxPendingBytes := persistentqueue.DefaultChunkFileSize
+
+	fq := persistentqueue.MustOpenFastQueue(queuePath, sanitizedURL, maxInmemoryBlocks, int64(maxPendingBytes), false)
+	_ = metrics.GetOrCreateGauge(fmt.Sprintf(`vmagent_remotewrite_pending_data_bytes{path=%q, url=%q}`, queuePath, sanitizedURL), func() float64 {
+		return float64(fq.GetPendingBytes())
+	})
+	_ = metrics.GetOrCreateGauge(fmt.Sprintf(`vmagent_remotewrite_pending_inmemory_blocks{path=%q, url=%q}`, queuePath, sanitizedURL), func() float64 {
+		return float64(fq.GetInmemoryQueueLen())
+	})
+	_ = metrics.GetOrCreateGauge(fmt.Sprintf(`vmagent_remotewrite_queue_blocked{path=%q, url=%q}`, queuePath, sanitizedURL), func() float64 {
+		if fq.IsWriteBlocked() {
+			return 1
+		}
+		return 0
+	})
+
+	var c *client
+	switch remoteWriteURL.Scheme {
+	case "http", "https":
+		tenantHeader := fmt.Sprintf("X-Scope-OrgID: %s", tenantName)
+		c = newTenantHTTPClient(tenantHeader, remoteWriteURL.String(), sanitizedURL, fq, *queues)
+	default:
+		logger.Fatalf("unsupported scheme: %s for remoteWriteURL: %s, want `http`, `https`", remoteWriteURL.Scheme, sanitizedURL)
+	}
+	// 这里 argInx 固定为 0
+	c.init(0, *queues, sanitizedURL)
+
+	// Initialize pss
+	sf := significantFigures.GetOptionalArg(0)
+	rd := roundDigits.GetOptionalArg(0)
+	pssLen := *queues
+	if n := cgroup.AvailableCPUs(); pssLen > n {
+		// There is no sense in running more than availableCPUs concurrent pendingSeries,
+		// since every pendingSeries can saturate up to a single CPU.
+		pssLen = n
+	}
+	pss := make([]*pendingSeries, pssLen)
+	for i := range pss {
+		pss[i] = newPendingSeries(fq, c.useVMProto, sf, rd)
+	}
+
+	rwctx := &remoteWriteCtx{
+		idx: 0,
 		fq:  fq,
 		c:   c,
 		pss: pss,
