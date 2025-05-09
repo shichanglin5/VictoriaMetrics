@@ -64,20 +64,21 @@ type UserInfo struct {
 	Username    string `yaml:"username,omitempty"`
 	Password    string `yaml:"password,omitempty"`
 
-	URLPrefix              *URLPrefix  `yaml:"url_prefix,omitempty"`
-	DiscoverBackendIPs     *bool       `yaml:"discover_backend_ips,omitempty"`
-	URLMaps                []URLMap    `yaml:"url_map,omitempty"`
-	HeadersConf            HeadersConf `yaml:",inline"`
-	MaxConcurrentRequests  int         `yaml:"max_concurrent_requests,omitempty"`
-	DefaultURL             *URLPrefix  `yaml:"default_url,omitempty"`
-	RetryStatusCodes       []int       `yaml:"retry_status_codes,omitempty"`
-	LoadBalancingPolicy    string      `yaml:"load_balancing_policy,omitempty"`
-	DropSrcPathPrefixParts *int        `yaml:"drop_src_path_prefix_parts,omitempty"`
-	TLSCAFile              string      `yaml:"tls_ca_file,omitempty"`
-	TLSCertFile            string      `yaml:"tls_cert_file,omitempty"`
-	TLSKeyFile             string      `yaml:"tls_key_file,omitempty"`
-	TLSServerName          string      `yaml:"tls_server_name,omitempty"`
-	TLSInsecureSkipVerify  *bool       `yaml:"tls_insecure_skip_verify,omitempty"`
+	URLPrefix                               *URLPrefix  `yaml:"url_prefix,omitempty"`
+	DiscoverBackendIPs                      *bool       `yaml:"discover_backend_ips,omitempty"`
+	URLMaps                                 []URLMap    `yaml:"url_map,omitempty"`
+	HeadersConf                             HeadersConf `yaml:",inline"`
+	MaxConcurrentRequests                   int         `yaml:"max_concurrent_requests,omitempty"`
+	ReturnOkWhenExceedMaxConcurrentRequests bool        `yaml:"return_ok_when_exceed_max_concurrent_requests,omitempty"`
+	DefaultURL                              *URLPrefix  `yaml:"default_url,omitempty"`
+	RetryStatusCodes                        []int       `yaml:"retry_status_codes,omitempty"`
+	LoadBalancingPolicy                     string      `yaml:"load_balancing_policy,omitempty"`
+	DropSrcPathPrefixParts                  *int        `yaml:"drop_src_path_prefix_parts,omitempty"`
+	TLSCAFile                               string      `yaml:"tls_ca_file,omitempty"`
+	TLSCertFile                             string      `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile                              string      `yaml:"tls_key_file,omitempty"`
+	TLSServerName                           string      `yaml:"tls_server_name,omitempty"`
+	TLSInsecureSkipVerify                   *bool       `yaml:"tls_insecure_skip_verify,omitempty"`
 
 	MetricLabels map[string]string `yaml:"metric_labels,omitempty"`
 

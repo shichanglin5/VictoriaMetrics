@@ -185,7 +185,11 @@ func processUserRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo) {
 	select {
 	case concurrencyLimitCh <- struct{}{}:
 		if err := ui.beginConcurrencyLimit(); err != nil {
-			handleConcurrencyLimitError(w, r, err)
+			if ui.ReturnOkWhenExceedMaxConcurrentRequests {
+				handleConcurrencyLimitOk(w, r)
+			} else {
+				handleConcurrencyLimitError(w, r, err)
+			}
 			<-concurrencyLimitCh
 			return
 		}
@@ -524,7 +528,28 @@ func handleMissingAuthorizationError(w http.ResponseWriter) {
 	http.Error(w, "missing 'Authorization' request header", http.StatusUnauthorized)
 }
 
+func DiscardRequest(r *http.Request) {
+	// 尝试消费请求体
+	_, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		return
+	}
+	// 始终关闭请求体，防止 socket 泄漏
+	if err := r.Body.Close(); err != nil {
+		return
+	}
+}
+
+func handleConcurrencyLimitOk(w http.ResponseWriter, r *http.Request) {
+	DiscardRequest(r)
+	httpserver.Errorf(w, r, "%s", &httpserver.ErrorWithStatusCode{
+		Err:        errors.New("concurrency limit exceeded: ignored! return 200 Ok"),
+		StatusCode: http.StatusOK,
+	})
+}
+
 func handleConcurrencyLimitError(w http.ResponseWriter, r *http.Request, err error) {
+	DiscardRequest(r)
 	w.Header().Add("Retry-After", "10")
 	err = &httpserver.ErrorWithStatusCode{
 		Err:        err,
