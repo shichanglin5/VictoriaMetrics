@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -722,6 +723,15 @@ func reloadAuthConfigData(data []byte) (bool, error) {
 	authConfigData.Store(&data)
 	authUsers.Store(&m)
 
+	// 写到 /tmp/vmauth.yaml
+	// 写入文件（如果文件不存在则创建，存在则覆盖）
+	configOutPath := path.Join(os.TempDir(), "vmauth-config.yaml")
+	err = os.WriteFile(configOutPath, data, 0644)
+	if err != nil {
+		logger.Infof("write vmauth config to %q failed: %v", configOutPath, err)
+	} else {
+		logger.Infof("write vmauth config to %q succeeded", configOutPath)
+	}
 	return true, nil
 }
 
