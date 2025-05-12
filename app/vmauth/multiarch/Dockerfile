@@ -6,6 +6,7 @@ RUN apk update && apk upgrade && apk --update --no-cache add ca-certificates
 
 FROM $root_image
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && apk add curl
 EXPOSE 8427
 ENTRYPOINT ["/vmauth-prod"]
 ARG TARGETARCH
