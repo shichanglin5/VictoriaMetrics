@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"net/http"
 	nethttputil "net/http/httputil"
 	"net/url"
@@ -94,7 +95,10 @@ func main() {
 	envflag.Parse()
 	buildinfo.Init()
 	logger.Init()
-
+	cancelReloadConfig, err := config.InitVMSelectConfig()
+	if err != nil {
+		logger.Fatalf("cannot load config: %s", err)
+	}
 	logger.Infof("starting netstorage at storageNodes %s", *storageNodes)
 	startTime := time.Now()
 	storage.SetDedupInterval(*minScrapeInterval)
@@ -160,6 +164,7 @@ func main() {
 	logger.Infof("shutting down neststorage...")
 	startTime = time.Now()
 	netstorage.MustStop()
+	cancelReloadConfig()
 	if len(*cacheDataPath) > 0 {
 		promql.StopRollupResultCache()
 	}

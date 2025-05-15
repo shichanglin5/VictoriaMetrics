@@ -3,6 +3,7 @@ package promql
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"math"
 	"sort"
 	"strings"
@@ -296,6 +297,10 @@ func parsePromQLWithCache(q string) (metricsql.Expr, error) {
 }
 
 func escapeDotsInRegexpLabelFilters(e metricsql.Expr) metricsql.Expr {
+	labelNames := config.VMSelectTreatDotsAsIsLabels.Load()
+	if labelNames == nil || len(*labelNames) == 0 {
+		return e
+	}
 	metricsql.VisitAll(e, func(expr metricsql.Expr) {
 		me, ok := expr.(*metricsql.MetricExpr)
 		if !ok {
@@ -304,7 +309,7 @@ func escapeDotsInRegexpLabelFilters(e metricsql.Expr) metricsql.Expr {
 		for _, lfs := range me.LabelFilterss {
 			for i := range lfs {
 				f := &lfs[i]
-				if f.IsRegexp {
+				if f.IsRegexp && labelNames.Contains(f.Label) {
 					f.Value = escapeDots(f.Value)
 				}
 			}
@@ -320,10 +325,10 @@ func escapeDots(s string) string {
 	}
 	result := make([]byte, 0, len(s)+2*dotsCount)
 	for i := 0; i < len(s); i++ {
-		if s[i] == '.' && (i == 0 || s[i-1] != '\\') && (i+1 == len(s) || i+1 < len(s) && s[i+1] != '*' && s[i+1] != '+' && s[i+1] != '{') {
+		if s[i] == '.' && (i == 0 || s[i-1] != '\\') && (i+1 == len(s) || i+1 < len(s) && s[i+1] != '*' && s[i+1] != '+' && s[i+1] != '{' && s[i+1] != '.') {
 			// Escape a dot if the following conditions are met:
 			// - if it isn't escaped already, i.e. if there is no `\` char before the dot.
-			// - if there is no regexp modifiers such as '+', '*' or '{' after the dot.
+			// - if there is no regexp modifiers such as '+', '*', '.' or '{' after the dot.
 			result = append(result, '\\', '.')
 		} else {
 			result = append(result, s[i])

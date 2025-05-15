@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -66,21 +67,22 @@ type UserInfo struct {
 	Username    string `yaml:"username,omitempty"`
 	Password    string `yaml:"password,omitempty"`
 
-	URLPrefix              *URLPrefix  `yaml:"url_prefix,omitempty"`
-	DiscoverBackendIPs     *bool       `yaml:"discover_backend_ips,omitempty"`
-	URLMaps                []URLMap    `yaml:"url_map,omitempty"`
-	DumpRequestOnErrors    bool        `yaml:"dump_request_on_errors,omitempty"`
-	HeadersConf            HeadersConf `yaml:",inline"`
-	MaxConcurrentRequests  int         `yaml:"max_concurrent_requests,omitempty"`
-	DefaultURL             *URLPrefix  `yaml:"default_url,omitempty"`
-	RetryStatusCodes       []int       `yaml:"retry_status_codes,omitempty"`
-	LoadBalancingPolicy    string      `yaml:"load_balancing_policy,omitempty"`
-	DropSrcPathPrefixParts *int        `yaml:"drop_src_path_prefix_parts,omitempty"`
-	TLSCAFile              string      `yaml:"tls_ca_file,omitempty"`
-	TLSCertFile            string      `yaml:"tls_cert_file,omitempty"`
-	TLSKeyFile             string      `yaml:"tls_key_file,omitempty"`
-	TLSServerName          string      `yaml:"tls_server_name,omitempty"`
-	TLSInsecureSkipVerify  *bool       `yaml:"tls_insecure_skip_verify,omitempty"`
+	URLPrefix                               *URLPrefix  `yaml:"url_prefix,omitempty"`
+	DiscoverBackendIPs                      *bool       `yaml:"discover_backend_ips,omitempty"`
+	URLMaps                                 []URLMap    `yaml:"url_map,omitempty"`
+	DumpRequestOnErrors                     bool        `yaml:"dump_request_on_errors,omitempty"`
+	HeadersConf                             HeadersConf `yaml:",inline"`
+	MaxConcurrentRequests                   int         `yaml:"max_concurrent_requests,omitempty"`
+	ReturnOkWhenExceedMaxConcurrentRequests bool        `yaml:"return_ok_when_exceed_max_concurrent_requests,omitempty"`
+	DefaultURL                              *URLPrefix  `yaml:"default_url,omitempty"`
+	RetryStatusCodes                        []int       `yaml:"retry_status_codes,omitempty"`
+	LoadBalancingPolicy                     string      `yaml:"load_balancing_policy,omitempty"`
+	DropSrcPathPrefixParts                  *int        `yaml:"drop_src_path_prefix_parts,omitempty"`
+	TLSCAFile                               string      `yaml:"tls_ca_file,omitempty"`
+	TLSCertFile                             string      `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile                              string      `yaml:"tls_key_file,omitempty"`
+	TLSServerName                           string      `yaml:"tls_server_name,omitempty"`
+	TLSInsecureSkipVerify                   *bool       `yaml:"tls_insecure_skip_verify,omitempty"`
 
 	MetricLabels map[string]string `yaml:"metric_labels,omitempty"`
 
@@ -90,6 +92,7 @@ type UserInfo struct {
 	rt http.RoundTripper
 
 	requests         *metrics.Counter
+	requestBytes     *metrics.Counter
 	backendErrors    *metrics.Counter
 	requestsDuration *metrics.Summary
 }
@@ -719,6 +722,15 @@ func reloadAuthConfigData(data []byte) (bool, error) {
 	authConfigData.Store(&data)
 	authUsers.Store(&m)
 
+	// 写到 /tmp/vmauth.yaml
+	// 写入文件（如果文件不存在则创建，存在则覆盖）
+	configOutPath := path.Join(os.TempDir(), "vmauth-config.yaml")
+	err = os.WriteFile(configOutPath, data, 0644)
+	if err != nil {
+		logger.Infof("write vmauth config to %q failed: %v", configOutPath, err)
+	} else {
+		logger.Infof("write vmauth config to %q succeeded", configOutPath)
+	}
 	return true, nil
 }
 
@@ -760,6 +772,7 @@ func parseAuthConfig(data []byte) (*AuthConfig, error) {
 			return nil, fmt.Errorf("cannot parse metric_labels for unauthorized_user: %w", err)
 		}
 		ui.requests = ac.ms.NewCounter(`vmauth_unauthorized_user_requests_total` + metricLabels)
+		ui.requestBytes = ac.ms.NewCounter(`vmauth_unauthorized_user_requests_bytes_total` + metricLabels)
 		ui.backendErrors = ac.ms.NewCounter(`vmauth_unauthorized_user_request_backend_errors_total` + metricLabels)
 		ui.requestsDuration = ac.ms.NewSummary(`vmauth_unauthorized_user_request_duration_seconds` + metricLabels)
 		ui.concurrencyLimitCh = make(chan struct{}, ui.getMaxConcurrentRequests())
@@ -808,6 +821,7 @@ func parseAuthConfigUsers(ac *AuthConfig) (map[string]*UserInfo, error) {
 			return nil, fmt.Errorf("cannot parse metric_labels: %w", err)
 		}
 		ui.requests = ac.ms.GetOrCreateCounter(`vmauth_user_requests_total` + metricLabels)
+		ui.requestBytes = ac.ms.GetOrCreateCounter(`vmauth_user_requests_bytes_total` + metricLabels)
 		ui.backendErrors = ac.ms.GetOrCreateCounter(`vmauth_user_request_backend_errors_total` + metricLabels)
 		ui.requestsDuration = ac.ms.GetOrCreateSummary(`vmauth_user_request_duration_seconds` + metricLabels)
 		mcr := ui.getMaxConcurrentRequests()

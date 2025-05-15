@@ -3,6 +3,8 @@ package prometheus
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
+	"github.com/VictoriaMetrics/metricsql"
 	"math"
 	"net"
 	"net/http"
@@ -14,8 +16,6 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/metrics"
-	"github.com/VictoriaMetrics/metricsql"
-
 	"github.com/valyala/fastjson/fastfloat"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmselect/netstorage"
@@ -869,6 +869,9 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Token, w
 	if len(query) > maxQueryLen.IntN() {
 		return fmt.Errorf("too long query; got %d bytes; mustn't exceed `-search.maxQueryLen=%d` bytes", len(query), maxQueryLen.N)
 	}
+	if config.ShouldBlockQuery(query) {
+		return config.ErrBlockedQuery
+	}
 	etfs, err := searchutil.GetExtraTagFilters(r)
 	if err != nil {
 		return err
@@ -1044,6 +1047,9 @@ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, at *auth.Tok
 	// Validate input args.
 	if len(query) > maxQueryLen.IntN() {
 		return fmt.Errorf("too long query; got %d bytes; mustn't exceed `-search.maxQueryLen=%d` bytes", len(query), maxQueryLen.N)
+	}
+	if config.ShouldBlockQuery(query) {
+		return config.ErrBlockedQuery
 	}
 	if start > end {
 		end = start + defaultStep

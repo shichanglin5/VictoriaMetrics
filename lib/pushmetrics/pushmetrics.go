@@ -3,6 +3,9 @@ package pushmetrics
 import (
 	"context"
 	"flag"
+	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +39,29 @@ var (
 
 // Init must be called after logger.Init
 func Init() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Fatalf("cannot determine hostname: %s", err)
+	}
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("instance=\"%s\"", hostname))
+
+	// scrape-{idc}-{tenant} 模式添加 job 标签
+	var jobName string
+	if mts.IsVmAgentType() {
+		jobName = fmt.Sprintf("scrape-%s-%s", mts.ScrapeGroup, mts.ScrapeTenant)
+	} else if mts.IsPushGatewayType() {
+		idc := os.Getenv("IDC")
+		if idc != "" {
+			jobName = fmt.Sprintf("pushgateway-%s", idc)
+		} else {
+			jobName = "pushgateway"
+		}
+	}
+
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("job=\"%s\"", jobName))
+
 	extraLabels := strings.Join(*pushExtraLabel, ",")
+	// 添加 hostname 标签
 	for _, pu := range *pushURL {
 		opts := &metrics.PushOptions{
 			ExtraLabels:        extraLabels,

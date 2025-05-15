@@ -6,12 +6,18 @@ DATEINFO_TAG ?= $(shell date -u +'%Y%m%d-%H%M%S')
 BUILDINFO_TAG ?= $(shell echo $$(git describe --long --all | tr '/' '-')$$( \
 	      git diff-index --quiet HEAD -- || echo '-dirty-'$$(git diff-index -u HEAD | openssl sha1 | cut -d' ' -f2 | cut -c 1-8)))
 
-PKG_TAG ?= $(shell git tag -l --points-at HEAD)
+PKG_TAG ?= $(shell \
+  TAG=$$(git describe --tags --abbrev=0); \
+  COMMIT=$$(git rev-parse --short HEAD); \
+  DATE=$$(git show -s --date=format:'%Y%m%d' --format=%cd); \
+  DIRTY=$$(git diff --quiet || echo -dirty); \
+  echo $$TAG-$$COMMIT-$$DATE$$DIRTY \
+)
 ifeq ($(PKG_TAG),)
 PKG_TAG := $(BUILDINFO_TAG)
 endif
 
-GO_BUILDINFO = -X '$(PKG_PREFIX)/lib/buildinfo.Version=$(APP_NAME)-$(DATEINFO_TAG)-$(BUILDINFO_TAG)'
+GO_BUILDINFO = -X '$(PKG_PREFIX)/lib/buildinfo.Version=$(APP_NAME)-$(PKG_TAG)'
 TAR_OWNERSHIP ?= --owner=1000 --group=1000
 
 .PHONY: $(MAKECMDGOALS)
@@ -22,6 +28,9 @@ include docs/Makefile
 include deployment/*/Makefile
 include dashboards/Makefile
 include package/release/Makefile
+
+echo:
+	@echo $(PKG_TAG)
 
 all: \
 	vminsert \
@@ -100,7 +109,18 @@ vmcluster-crossbuild:
 publish: \
 	publish-vminsert \
 	publish-vmselect \
-	publish-vmstorage
+	publish-vmstorage \
+	publish-vmauth \
+	publish-vmagent \
+	publish-vmbackup \
+	publish-vmrestore \
+	publish-vmctl
+
+publish-common: \
+	publish-vminsert \
+	publish-vmselect \
+	publish-vmstorage \
+	publish-vmauth
 
 package: \
 	package-vminsert \

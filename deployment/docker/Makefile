@@ -15,6 +15,10 @@ DOCKER_RUN ?= $(DOCKER) run
 DOCKER_BUILD ?= $(DOCKER) build
 DOCKER_COMPOSE ?= $(DOCKER) compose
 DOCKER_IMAGE_LS ?= $(DOCKER) image ls --format '{{.Repository}}:{{.Tag}}'
+TARGET_PLATFORM ?= linux/amd64
+COMMA := ,
+GO_GC_FLAGS ?=
+GO_BUILD_CLASSIFIER ?=
 
 package-base:
 	($(DOCKER_IMAGE_LS) | grep -q '$(BASE_IMAGE)$$') \
@@ -22,6 +26,7 @@ package-base:
 			--build-arg root_image=$(ROOT_IMAGE) \
 			--build-arg certs_image=$(CERTS_IMAGE) \
 			--tag $(BASE_IMAGE) \
+			$(DOCKER_BUILD_OPTS) \
 			deployment/docker/base
 
 package-builder:
@@ -29,6 +34,7 @@ package-builder:
 		|| $(DOCKER_BUILD) \
 			--build-arg go_builder_image=$(GO_BUILDER_IMAGE) \
 			--tag $(BUILDER_IMAGE) \
+			$(DOCKER_BUILD_OPTS) \
 			deployment/docker/builder
 
 app-via-docker: package-builder
@@ -43,6 +49,7 @@ app-via-docker: package-builder
 		$(BUILDER_IMAGE) \
 		go build $(RACE) -trimpath -buildvcs=false \
 			-ldflags "-extldflags '-static' $(GO_BUILDINFO)" \
+			-gcflags "$(GO_GC_FLAGS)" \
 			-tags 'netgo osusergo musl' \
 			-o bin/$(APP_NAME)$(APP_SUFFIX)-prod $(PKG_PREFIX)/app/$(APP_NAME)
 
@@ -77,13 +84,10 @@ package-via-docker: package-base
 			-f app/$(APP_NAME)/deployment/Dockerfile bin)
 
 publish-via-docker:
-	$(MAKE_PARALLEL) app-via-docker-linux-amd64 \
-		app-via-docker-linux-arm \
-		app-via-docker-linux-arm64 \
-		app-via-docker-linux-ppc64le \
-		app-via-docker-linux-386
+	$(eval TARGET_PLATFORMS := $(subst $(COMMA), ,$(TARGET_PLATFORM)))
+	$(MAKE_PARALLEL) $(foreach PLATFORM,$(TARGET_PLATFORMS),app-via-docker-$(subst /,-,$(PLATFORM)))
 	$(DOCKER) buildx build \
-		--platform=linux/amd64,linux/arm,linux/arm64,linux/ppc64le,linux/386 \
+		--platform=$(TARGET_PLATFORM) \
 		--build-arg certs_image=$(CERTS_IMAGE) \
 		--build-arg root_image=$(ROOT_IMAGE) \
 		--build-arg APP_NAME=$(APP_NAME) \
@@ -99,35 +103,12 @@ publish-via-docker:
 		) \
 		-o type=image \
 		--provenance=false \
+		$(DOCKER_BUILD_OPTS) \
 		-f app/$(APP_NAME)/multiarch/Dockerfile \
 		--push \
+		--load \
 		bin
-	$(DOCKER) buildx build \
-		--platform=linux/amd64,linux/arm,linux/arm64,linux/ppc64le,linux/386 \
-		--build-arg certs_image=$(CERTS_IMAGE) \
-		--build-arg root_image=$(ROOT_IMAGE_SCRATCH) \
-		--build-arg APP_NAME=$(APP_NAME) \
-		--build-arg BINARY_SUFFIX="" \
-		--label "org.opencontainers.image.source=https://github.com/VictoriaMetrics/VictoriaMetrics" \
-		--label "org.opencontainers.image.documentation=https://docs.victoriametrics.com/" \
-		--label "org.opencontainers.image.title=$(APP_NAME)" \
-		--label "org.opencontainers.image.vendor=VictoriaMetrics" \
-		--label "org.opencontainers.image.version=$(PKG_TAG)" \
-		--label "org.opencontainers.image.created=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-		$(foreach registry,$(DOCKER_REGISTRIES),\
-		--tag $(registry)/$(DOCKER_NAMESPACE)/$(APP_NAME):$(PKG_TAG)$(RACE)-scratch \
-		) \
-		-o type=image \
-		--provenance=false \
-		-f app/$(APP_NAME)/multiarch/Dockerfile \
-		--push \
-		bin
-	cd bin && rm -rf \
-		$(APP_NAME)-linux-amd64-prod \
-		$(APP_NAME)-linux-arm-prod \
-		$(APP_NAME)-linux-arm64-prod \
-		$(APP_NAME)-linux-ppc64le-prod \
-		$(APP_NAME)-linux-386-prod
+	cd bin && rm -rf $(foreach PLATFORM,$(TARGET_PLATFORMS),$(APP_NAME)-$(subst /,-,$(PLATFORM))-prod)
 
 run-via-docker: package-via-docker
 	$(DOCKER_RUN) -it --rm \

@@ -3,7 +3,9 @@ package storage
 import (
 	"container/heap"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"io"
+	"time"
 )
 
 // blockStreamMerger is used for merging block streams.
@@ -66,7 +68,20 @@ func (bsm *blockStreamMerger) Init(bsrs []*blockStreamReader, retentionDeadline 
 	bsm.useSparseCache = useSparseCache
 }
 
-func (bsm *blockStreamMerger) getRetentionDeadline(_ *blockHeader) int64 {
+//func (bsm *blockStreamMerger) getRetentionDeadline(_ *blockHeader) int64 {
+//	return bsm.retentionDeadline
+//}
+
+// 上面注释的方法是原始逻辑
+// 改造点：基于 blockHeader 的 TSID 获取租户保留时长配置，如果为空，则使用默认配置
+func (bsm *blockStreamMerger) getRetentionDeadline(bh *blockHeader) int64 {
+	vmStorageConfig := config.VMStorageConfigVar.Load()
+	if vmStorageConfig != nil {
+		tenant := fmt.Sprintf("%d:%d", bh.TSID.AccountID, bh.TSID.ProjectID)
+		if tenantPeriod, ok := vmStorageConfig.TenantRetentionPeriod[tenant]; ok && tenantPeriod > 0 {
+			return timestampFromTime(time.Now()) - time.Duration(tenantPeriod).Milliseconds()
+		}
+	}
 	return bsm.retentionDeadline
 }
 

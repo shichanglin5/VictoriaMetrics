@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmagent/remotewrite"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -874,6 +877,10 @@ func (cfg *Config) getStaticScrapeWork() []*ScrapeWork {
 }
 
 func getScrapeWorkConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConfig) (*scrapeWorkConfig, error) {
+	return getScrapeWorkConfigForMtsConfig(sc, baseDir, globalCfg)
+}
+
+func getScrapeWorkConfigForMtsConfig(sc *ScrapeConfig, baseDir string, globalCfg *GlobalConfig) (*scrapeWorkConfig, error) {
 	jobName := sc.JobName
 	if jobName == "" {
 		return nil, fmt.Errorf("missing `job_name` field in `scrape_config`")
@@ -1268,8 +1275,30 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// Remove labels with "__" prefix according to https://www.robustperception.io/life-of-a-label/
 	labels.RemoveLabelsWithDoubleUnderscorePrefix()
 	// Add missing "instance" label according to https://www.robustperception.io/life-of-a-label
-	if labels.Get("instance") == "" {
-		labels.Add("instance", address)
+
+	// dbproxy 不需要 ident tag
+	var tenant string
+	if at != nil {
+		t, ok := remotewrite.AuthTokenToTenant.Load(at.String())
+		if !ok {
+			mts.MtsWarningMetrics.Inc()
+			return nil, fmt.Errorf("cannot find tenant for auth token %q", at)
+		}
+		tenant = t.(string)
+	}
+	if tenant != "inf-dbproxy" && tenant != "inf-redisproxy" {
+		labels.Add("ident", address)
+	}
+	// autoMetrics 比如 target_up 等添加额外的 url 标签
+	_, err := url.Parse(scrapeURL)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse url %q: %w", scrapeURL, err)
+	}
+	autoMetricsTags := []prometheus.Tag{
+		{
+			Key:   "url",
+			Value: scrapeURL,
+		},
 	}
 	if *clusterMemberLabel != "" && *clusterMemberNum != "" {
 		labels.Add(*clusterMemberLabel, *clusterMemberNum)
@@ -1294,6 +1323,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 		DenyRedirects:        swc.denyRedirects,
 		OriginalLabels:       originalLabels,
 		Labels:               labelsCopy,
+		AutoMetricTags:       autoMetricsTags,
 		ExternalLabels:       swc.externalLabels,
 		ProxyURL:             swc.proxyURL,
 		ProxyAuthConfig:      swc.proxyAuthConfig,

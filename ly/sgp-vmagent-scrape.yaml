@@ -1,0 +1,54 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAgent
+metadata:
+  name: scrape-default
+  namespace: vm-cluster-meta
+spec:
+  statefulRollingUpdateStrategy: OnDelete
+  nodeSelector:
+    owner: mimir
+  extraArgs:
+    enableMultitenantHandlers: 'false'
+    http.shutdownDelay: 45s
+    maxInsertRequestSize: '67108864'
+    promscrape.cluster.name: write-1
+    promscrape.configCheckInterval: 3s
+    promscrape.dropOriginalLabels: 'true'
+    promscrape.streamParse: 'true'
+    promscrape.suppressScrapeErrorsDelay: 30m
+    remoteWrite.forceVMProto: 'true'
+    remoteWrite.maxDiskUsagePerURL: '100737418240'
+    remoteWrite.showURL: 'true'
+    pushmetrics.url: 'http://127.0.0.1:8429/api/v1/import/prometheus'
+    pushmetrics.header: 'X-Scope-OrgID:meta'
+    pushmetrics.interval: '5s'
+  extraEnvs:
+    - name: MTS_CLIENT_TYPE
+      value: vmagent
+    - name: IDC
+      value: 'ap-southeast-1'
+    - name: SCRAPE_TENANT
+      value: 'default'
+    - name: MTS_URL
+      value: 'http://ap-southeast-1.inf-mts.dss.17usoft.com'
+  image:
+    repository: victoriametrics/vmagent
+    tag: c248e1af8
+  ingestOnlyMode: true
+  replicaCount: 3
+  resources:
+    limits:
+      cpu: 2
+      memory: 4Gi
+    requests:
+      cpu: 100m
+      memory: 100Mi
+  scrapeInterval: 15s
+  statefulMode: true
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+  remoteWrite:
+    - url: xxx

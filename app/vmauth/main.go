@@ -69,6 +69,7 @@ var (
 	dryRun                   = flag.Bool("dryRun", false, "Whether to check only config files without running vmauth. The auth configuration file is validated. The -auth.config flag must be specified.")
 	removeXFFHTTPHeaderValue = flag.Bool(`removeXFFHTTPHeaderValue`, false, "Whether to remove the X-Forwarded-For HTTP header value from client requests before forwarding them to the backend. "+
 		"Recommended when vmauth is exposed to the internet.")
+	slowQuerySeconds = flag.Float64("slowQuerySeconds", 20, "Log slow queries taking more than this duration. ")
 )
 
 func main() {
@@ -200,16 +201,41 @@ func getUserInfoByAuthTokens(ats []string) *UserInfo {
 
 func processUserRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo) {
 	startTime := time.Now()
-	defer ui.requestsDuration.UpdateDuration(startTime)
+	defer func() {
+		seconds := time.Since(startTime).Seconds()
+		ui.requestsDuration.Update(seconds)
+		if seconds > *slowQuerySeconds {
+			if strings.HasSuffix(r.URL.Path, "/query") || strings.HasSuffix(r.URL.Path, "/query_range") {
+				query := r.FormValue("query")
+				if len(query) > 0 {
+					// userName(duration), url(trunc 1024), query
+					if len(query) > 1024 {
+						query = query[:1024]
+					}
+					reqParams, _ := url.QueryUnescape(r.URL.RawQuery)
+					logger.Warnf("slowReq(promQL): %s (%f), url params: %s, promql: %s", ui.Name, seconds, reqParams, query)
+				}
+			} else {
+				// userName(duration), url(trunc 1024)
+				reqUrl, _ := url.QueryUnescape(r.URL.String())
+				logger.Warnf("slowReq: %s(%f), url: %s", ui.Name, seconds, reqUrl)
+			}
+		}
+	}()
 
 	ui.requests.Inc()
+	ui.requestBytes.AddInt64(r.ContentLength)
 
 	// Limit the concurrency of requests to backends
 	concurrencyLimitOnce.Do(concurrencyLimitInit)
 	select {
 	case concurrencyLimitCh <- struct{}{}:
 		if err := ui.beginConcurrencyLimit(); err != nil {
-			handleConcurrencyLimitError(w, r, err)
+			if ui.ReturnOkWhenExceedMaxConcurrentRequests {
+				handleConcurrencyLimitOk(w, r)
+			} else {
+				handleConcurrencyLimitError(w, r, err)
+			}
 			<-concurrencyLimitCh
 			return
 		}
@@ -249,7 +275,7 @@ func processRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo) {
 		isDefault = true
 	}
 
-	rtb := newReadTrackingBody(r.Body, maxRequestBodySizeToRetry.IntN())
+	rtb := getReadTrackingBody(r.Body, maxRequestBodySizeToRetry.IntN())
 	r.Body = rtb
 
 	maxAttempts := up.getBackendsCount()
@@ -550,7 +576,28 @@ func handleMissingAuthorizationError(w http.ResponseWriter) {
 	http.Error(w, "missing 'Authorization' request header", http.StatusUnauthorized)
 }
 
+func DiscardRequest(r *http.Request) {
+	// 尝试消费请求体
+	_, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		return
+	}
+	// 始终关闭请求体，防止 socket 泄漏
+	if err := r.Body.Close(); err != nil {
+		return
+	}
+}
+
+func handleConcurrencyLimitOk(w http.ResponseWriter, r *http.Request) {
+	DiscardRequest(r)
+	httpserver.Errorf(w, r, "%s", &httpserver.ErrorWithStatusCode{
+		Err:        errors.New("concurrency limit exceeded: ignored! return 200 Ok"),
+		StatusCode: http.StatusOK,
+	})
+}
+
 func handleConcurrencyLimitError(w http.ResponseWriter, r *http.Request, err error) {
+	DiscardRequest(r)
 	w.Header().Add("Retry-After", "10")
 	err = &httpserver.ErrorWithStatusCode{
 		Err:        err,
@@ -584,11 +631,22 @@ type readTrackingBody struct {
 	bufComplete bool
 }
 
-func newReadTrackingBody(r io.ReadCloser, maxBodySize int) *readTrackingBody {
-	// do not use sync.Pool there
-	// since http.RoundTrip may still use request body after return
-	// See this issue for details https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8051
-	rtb := &readTrackingBody{}
+func (rtb *readTrackingBody) reset() {
+	rtb.maxBodySize = 0
+	rtb.r = nil
+	rtb.buf = rtb.buf[:0]
+	rtb.readBuf = nil
+	rtb.cannotRetry = false
+	rtb.bufComplete = false
+}
+
+func getReadTrackingBody(r io.ReadCloser, maxBodySize int) *readTrackingBody {
+	v := readTrackingBodyPool.Get()
+	if v == nil {
+		v = &readTrackingBody{}
+	}
+	rtb := v.(*readTrackingBody)
+
 	if maxBodySize < 0 {
 		maxBodySize = 0
 	}
@@ -610,6 +668,13 @@ func (r *zeroReader) Read(_ []byte) (int, error) {
 func (r *zeroReader) Close() error {
 	return nil
 }
+
+func putReadTrackingBody(rtb *readTrackingBody) {
+	rtb.reset()
+	readTrackingBodyPool.Put(rtb)
+}
+
+var readTrackingBodyPool sync.Pool
 
 // Read implements io.Reader interface.
 func (rtb *readTrackingBody) Read(p []byte) (int, error) {

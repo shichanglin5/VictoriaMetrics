@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/netutil"
 	"io"
 	"net/http"
 	"net/url"
@@ -176,6 +177,35 @@ func newHTTPClient(argIdx int, remoteWriteURL, sanitizedURL string, fq *persiste
 	}
 	c.useVMProto.Store(useVMProto)
 
+	return c
+}
+
+// newTenantHTTPClient 用于 mts 配置场景
+func newTenantHTTPClient(tenantHeader string, remoteWriteURL, sanitizedURL string, fq *persistentqueue.FastQueue, concurrency int) *client {
+	opts := &promauth.Options{
+		Headers: []string{tenantHeader},
+	}
+	authCfg, _ := opts.NewConfig()
+	tr := &http.Transport{
+		DialContext:         netutil.NewStatDialFunc("vmagent_remotewrite"),
+		MaxConnsPerHost:     2 * concurrency,
+		MaxIdleConnsPerHost: 2 * concurrency,
+		IdleConnTimeout:     time.Minute,
+		WriteBufferSize:     64 * 1024,
+	}
+	hc := &http.Client{
+		Transport: authCfg.NewRoundTripper(tr),
+	}
+	c := &client{
+		sanitizedURL:   sanitizedURL,
+		remoteWriteURL: remoteWriteURL,
+		authCfg:        authCfg,
+		fq:             fq,
+		hc:             hc,
+		stopCh:         make(chan struct{}),
+	}
+	c.useVMProto.Store(true)
+	c.sendBlock = c.sendBlockHTTP
 	return c
 }
 

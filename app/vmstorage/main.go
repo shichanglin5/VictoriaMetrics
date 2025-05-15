@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"io"
 	"net/http"
 	"os"
@@ -129,6 +130,10 @@ func main() {
 	mergeset.SetDataBlocksCacheSize(cacheSizeIndexDBDataBlocks.IntN())
 	mergeset.SetDataBlocksSparseCacheSize(cacheSizeIndexDBDataBlocksSparse.IntN())
 
+	storageConfigCancelFunc, err := config.InitVMStorageConfig()
+	if err != nil {
+		logger.Fatalf("error initializing config: %v", err)
+	}
 	if retentionPeriod.Duration() < 24*time.Hour {
 		logger.Fatalf("-retentionPeriod cannot be smaller than a day; got %s", retentionPeriod)
 	}
@@ -199,6 +204,7 @@ func main() {
 	storageMetrics = nil
 
 	stopStaleSnapshotsRemover()
+	storageConfigCancelFunc()
 	vmselectSrv.MustStop()
 	vminsertSrv.MustStop()
 	protoparserutil.StopUnmarshalWorkers()

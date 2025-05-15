@@ -27,6 +27,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompbmarshal"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promrelabel"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutil"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	parser "github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus/stream"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/protoparserutil"
@@ -99,7 +100,8 @@ type ScrapeWork struct {
 	// See also https://prometheus.io/docs/concepts/jobs_instances/
 	//
 	// Labels are sorted by name.
-	Labels *promutil.Labels
+	Labels         *promutil.Labels
+	AutoMetricTags []prometheus.Tag
 
 	// ExternalLabels contains labels from global->external_labels section of -promscrape.config
 	//
@@ -173,12 +175,12 @@ func (sw *ScrapeWork) key() string {
 		"HonorTimestamps=%v, DenyRedirects=%v, Labels=%s, ExternalLabels=%s, MaxScrapeSize=%d, "+
 		"ProxyURL=%s, ProxyAuthConfig=%s, AuthConfig=%s, MetricRelabelConfigs=%q, "+
 		"SampleLimit=%d, DisableCompression=%v, DisableKeepAlive=%v, StreamParse=%v, "+
-		"ScrapeAlignInterval=%s, ScrapeOffset=%s, SeriesLimit=%d, NoStaleMarkers=%v",
-		sw.jobNameOriginal, sw.ScrapeURL, sw.ScrapeInterval, sw.ScrapeTimeout, sw.HonorLabels,
-		sw.HonorTimestamps, sw.DenyRedirects, sw.Labels.String(), sw.ExternalLabels.String(), sw.MaxScrapeSize,
+		"ScrapeAlignInterval=%s, ScrapeOffset=%s, SeriesLimit=%d, NoStaleMarkers=%v, AuthToken=%s",
+		sw.jobNameOriginal, sw.ScrapeURL, sw.ScrapeInterval, sw.ScrapeTimeout, sw.HonorLabels, sw.HonorTimestamps, sw.DenyRedirects, sw.Labels.String(),
+		sw.ExternalLabels.String(), sw.MaxScrapeSize,
 		sw.ProxyURL.String(), sw.ProxyAuthConfig.String(), sw.AuthConfig.String(), sw.MetricRelabelConfigs.String(),
 		sw.SampleLimit, sw.DisableCompression, sw.DisableKeepAlive, sw.StreamParse,
-		sw.ScrapeAlignInterval, sw.ScrapeOffset, sw.SeriesLimit, sw.NoStaleMarkers)
+		sw.ScrapeAlignInterval, sw.ScrapeOffset, sw.SeriesLimit, sw.NoStaleMarkers, sw.AuthToken.String())
 	return key
 }
 
@@ -948,24 +950,24 @@ func (wc *writeRequestCtx) addAutoMetrics(sw *scrapeWork, am *autoMetrics, times
 	rows := getAutoRows()
 	dst := slicesutil.SetLength(rows.Rows, 11)[:0]
 
-	dst = appendRow(dst, "scrape_duration_seconds", am.scrapeDurationSeconds, timestamp)
-	dst = appendRow(dst, "scrape_response_size_bytes", float64(am.scrapeResponseSize), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_duration_seconds", am.scrapeDurationSeconds, timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_response_size_bytes", float64(am.scrapeResponseSize), timestamp)
 
 	if sampleLimit := sw.Config.SampleLimit; sampleLimit > 0 {
 		// Expose scrape_samples_limit metric if sample_limit config is set for the target.
 		// See https://github.com/VictoriaMetrics/operator/issues/497
-		dst = appendRow(dst, "scrape_samples_limit", float64(sampleLimit), timestamp)
+		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_samples_limit", float64(sampleLimit), timestamp)
 	}
-	dst = appendRow(dst, "scrape_samples_post_metric_relabeling", float64(am.samplesPostRelabeling), timestamp)
-	dst = appendRow(dst, "scrape_samples_scraped", float64(am.samplesScraped), timestamp)
-	dst = appendRow(dst, "scrape_series_added", float64(am.seriesAdded), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_samples_post_metric_relabeling", float64(am.samplesPostRelabeling), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_samples_scraped", float64(am.samplesScraped), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_added", float64(am.seriesAdded), timestamp)
 	if sl := sw.getSeriesLimiter(); sl != nil {
-		dst = appendRow(dst, "scrape_series_current", float64(sl.CurrentItems()), timestamp)
-		dst = appendRow(dst, "scrape_series_limit_samples_dropped", float64(am.seriesLimitSamplesDropped), timestamp)
-		dst = appendRow(dst, "scrape_series_limit", float64(sl.MaxItems()), timestamp)
+		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_current", float64(sl.CurrentItems()), timestamp)
+		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_limit_samples_dropped", float64(am.seriesLimitSamplesDropped), timestamp)
+		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_limit", float64(sl.MaxItems()), timestamp)
 	}
-	dst = appendRow(dst, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
-	dst = appendRow(dst, "up", float64(am.up), timestamp)
+	appendRow(dst, sw.Config.AutoMetricTags, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
+	appendRow(dst, sw.Config.AutoMetricTags, "target_up", float64(am.up), timestamp)
 
 	wc.addRows(sw.Config, dst, timestamp, false)
 
@@ -988,9 +990,10 @@ func putAutoRows(rows *parser.Rows) {
 
 var autoRowsPool sync.Pool
 
-func appendRow(dst []parser.Row, metric string, value float64, timestamp int64) []parser.Row {
+func appendRow(dst []parser.Row, autoTags []prometheus.Tag, metric string, value float64, timestamp int64) []parser.Row {
 	return append(dst, parser.Row{
 		Metric:    metric,
+		Tags:      autoTags,
 		Value:     value,
 		Timestamp: timestamp,
 	})
