@@ -36,6 +36,10 @@ var (
 
 var Noop context.CancelFunc = func() {}
 
+func IsVmAgentRemoteWriteRuntimeConfigEnabled() bool {
+	return configPath != nil && len(*configPath) > 0
+}
+
 func LoadConfig(configParser func(data []byte) error) (context.CancelFunc, error) {
 	if len(*configPath) == 0 {
 		return Noop, nil

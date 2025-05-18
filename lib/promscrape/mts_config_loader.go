@@ -3,7 +3,6 @@ package promscrape
 import (
 	"errors"
 	"fmt"
-	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmagent/remotewrite"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
@@ -30,29 +29,12 @@ var globalConfig = &GlobalConfig{
 
 func WriteMtsConfigData(w io.Writer) {
 	p := MtsConfigData.Load()
-	logger.Infof("pullTargetsAddr: %v, otherHeartbeatAddrs: %v", GetPullTargetAddr(), mts.GetOtherHeartbeatAddrs())
+	logger.Infof("pullTargetsAddr: %v, otherHeartbeatAddrs: %v", mts.GetPullTargetAddr(), mts.GetHeartbeatAddrs())
 	if p == nil {
 		// Nothing to write to w
 		return
 	}
 	_, _ = w.Write(*p)
-}
-
-func init() {
-	mts.RegisterMtsClient(
-		"vmagent",
-		mts.InitCliVmAgent,
-		startBGTask,
-		nil,
-	)
-}
-
-func GetPullTargetAddr() string {
-	u := mts.PullTargetsAddr.Load()
-	if u == nil {
-		return mts.MtsUrl
-	}
-	return u.(string)
 }
 
 func IsScrapeInitErr(err error) bool {
@@ -63,60 +45,11 @@ var errGroupNotInitialized error = errors.New("mts scrape group not initialized"
 
 var sign = &mts.Md5Digest{Md5: "", Timestamp: 0}
 
-func startBGTask() error {
-	err := mts.StartHeartbeat(
-		mts.Cli,
-		func() *mts.MtsHeartbeatRequest {
-			return &mts.MtsHeartbeatRequest{Ident: mts.Ident, Addr: mts.Addr, Ts: time.Now().UnixMilli(), Tenant: mts.ScrapeTenant, Group: mts.ScrapeGroup, Stopping: mts.Cli.IsStopping()}
-		},
-		func(result *mts.MtsClientConfig) error {
-			newPullTargetsAddr := result.PullTargetsAddr
-			if newPullTargetsAddr == nil {
-				return nil
-			}
-			parsedAddr, err := mts.ParseUrl(*newPullTargetsAddr)
-			if err != nil {
-				mts.MtsWarningMetrics.Inc()
-				logger.Warnf("mts parse <PullTargetsAddr> err: %v, newAddr: %s", err, *newPullTargetsAddr)
-				return nil
-			}
-			previousAddr := GetPullTargetAddr()
-			if parsedAddr == mts.MtsUrl {
-				if parsedAddr != previousAddr {
-					logger.Infof("mts pull targets addr changed from %s to %s (same to MtsUrl)", previousAddr, parsedAddr)
-					mts.PullTargetsAddr.Store(parsedAddr)
-				}
-				return nil
-			}
-			if len(mts.GetOtherHeartbeatAddrs()) > 0 {
-				for _, heartbeatAddr := range mts.GetOtherHeartbeatAddrs() {
-					if heartbeatAddr == parsedAddr {
-						// pull targets 前提必须先上报心跳
-						if previousAddr != parsedAddr {
-							logger.Infof("mts pull targets addr changed from %s to %s", previousAddr, parsedAddr)
-							mts.PullTargetsAddr.Store(parsedAddr)
-						}
-						return nil
-					}
-				}
-				mts.MtsWarningMetrics.Inc()
-				logger.Warnf("mts pull targets addr (%s) is not in heartbeat addrs, %v", parsedAddr, mts.GetOtherHeartbeatAddrs())
-			}
-			return nil
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	return remotewrite.StartVmAgentConfig()
-}
-
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func loadScrapeConfig(_ string) (*Config, error) {
 	var cfg *Config
 	req := mts.MtsGetTargetsRequest{Ident: mts.Ident, Sign: sign.Signature(), Tenant: mts.ScrapeTenant, Group: mts.ScrapeGroup}
-	err := mts.PostRequest(mts.Cli, GetPullTargetAddr()+apiGetTarget, req, nil, func(respData *[]byte, mtsResult *mts.MtsResponse[*mts.PullTargetResult]) error {
+	err := mts.PostRequest(mts.Cli, mts.GetPullTargetAddr()+apiGetTarget, req, nil, func(respData *[]byte, mtsResult *mts.MtsResponse[*mts.PullTargetResult]) error {
 		switch mtsResult.Code {
 		case 0:
 			// targets 发生变化，需要解析
@@ -147,18 +80,18 @@ func loadScrapeConfig(_ string) (*Config, error) {
 					// add tenant labels
 					// 如果 job 指定了 tenant，则优先使用
 					if targetGroup.ScrapeConfig != nil && targetGroup.ScrapeConfig.Tenant != "" {
-						t, tok := remotewrite.TenantToAuthToken.Load(targetGroup.ScrapeConfig.Tenant)
+						t, tok := mts.TenantToAuthToken.Load(targetGroup.ScrapeConfig.Tenant)
 						if !tok {
 							mts.MtsWarningMetrics.Inc()
-							logger.Warnf("tenant(specified by scrape config) %s not found in remotewrite.TenantToAuthToken", mts.ScrapeTenant)
+							logger.Warnf("tenant(specified by scrape config) %s not found in mts.TenantToAuthToken", mts.ScrapeTenant)
 							continue
 						}
 						labels.Add("__tenant_id__", t.(*auth.Token).String())
 					} else {
-						t, tok := remotewrite.TenantToAuthToken.Load(mts.ScrapeTenant)
+						t, tok := mts.TenantToAuthToken.Load(mts.ScrapeTenant)
 						if !tok {
 							mts.MtsWarningMetrics.Inc()
-							logger.Warnf("tenant %s not found in remotewrite.TenantToAuthToken", mts.ScrapeTenant)
+							logger.Warnf("tenant %s not found in mts.TenantToAuthToken", mts.ScrapeTenant)
 							continue
 						}
 						labels.Add("__tenant_id__", t.(*auth.Token).String())

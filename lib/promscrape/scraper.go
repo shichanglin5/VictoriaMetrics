@@ -67,7 +67,7 @@ func CheckConfig() error {
 //
 // Scraped data is passed to pushData.
 func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
-	if noScrapeConfig() {
+	if IsScrapeDisabled() {
 		return
 	}
 	mustInitClusterMemberID()
@@ -81,15 +81,16 @@ func Init(pushData func(at *auth.Token, wr *prompbmarshal.WriteRequest)) {
 
 // Stop stops Prometheus scraper.
 func Stop() {
-	if noScrapeConfig() {
+	if IsScrapeDisabled() {
 		return
 	}
 	close(globalStopChan)
 	scraperWG.Wait()
 }
 
-func noScrapeConfig() bool {
-	return *promscrapeConfigFile == "" && !mts.IsVmAgentType()
+func IsScrapeDisabled() bool {
+	// 没有配置 config file，并且没有从 mts 加载 scrape config 则跳过
+	return *promscrapeConfigFile == "" && mts.IsMtsScrapeConfigDisabled()
 }
 
 var (
@@ -123,7 +124,7 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 
 	logger.Infof("reading scrape configs from %q", configFile)
 	var doLoadConfig func(configFile string) (*Config, error)
-	if mts.IsVmAgentType() {
+	if !mts.IsMtsScrapeConfigDisabled() {
 		doLoadConfig = loadScrapeConfig
 	} else {
 		doLoadConfig = loadConfig

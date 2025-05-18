@@ -197,12 +197,14 @@ func newTenantHTTPClient(tenantHeader string, remoteWriteURL, sanitizedURL strin
 		Transport: authCfg.NewRoundTripper(tr),
 	}
 	c := &client{
-		sanitizedURL:   sanitizedURL,
-		remoteWriteURL: remoteWriteURL,
-		authCfg:        authCfg,
-		fq:             fq,
-		hc:             hc,
-		stopCh:         make(chan struct{}),
+		sanitizedURL:     sanitizedURL,
+		remoteWriteURL:   remoteWriteURL,
+		authCfg:          authCfg,
+		fq:               fq,
+		hc:               hc,
+		retryMinInterval: time.Second * 2,
+		retryMaxTime:     time.Minute,
+		stopCh:           make(chan struct{}),
 	}
 	c.useVMProto.Store(true)
 	c.sendBlock = c.sendBlockHTTP

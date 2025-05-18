@@ -7,12 +7,6 @@ import (
 	"sync/atomic"
 )
 
-type MtsClientType struct {
-	InitFunc  func() error
-	StartFunc func() error
-	StopFunc  func() error
-}
-
 // MtsResponse TargetsResult 请求targets结果
 type MtsResponse[T any] struct {
 	Code    int    `json:"code"`

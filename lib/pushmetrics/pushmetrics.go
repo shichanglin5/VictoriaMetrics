@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promscrape"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -39,22 +41,15 @@ var (
 
 // Init must be called after logger.Init
 func Init() {
-	hostname, err := os.Hostname()
-	if err != nil {
-		logger.Fatalf("cannot determine hostname: %s", err)
-	}
-	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("instance=\"%s\"", hostname))
+	*pushExtraLabel = append(*pushExtraLabel, fmt.Sprintf("instance=\"%s\"", mts.Ident))
 
-	// scrape-{idc}-{tenant} 模式添加 job 标签
-	var jobName string
-	if mts.IsVmAgentType() {
-		jobName = fmt.Sprintf("scrape-%s-%s", mts.ScrapeGroup, mts.ScrapeTenant)
-	} else if mts.IsPushGatewayType() {
-		idc := os.Getenv("IDC")
-		if idc != "" {
-			jobName = fmt.Sprintf("pushgateway-%s", idc)
+	jobName := path.Base(os.Args[0])
+	// 如果是 vmagent，则拼接租户, idc 信息
+	if strings.EqualFold("vmagent", jobName) {
+		if !promscrape.IsScrapeDisabled() {
+			jobName = mts.ScrapeJobName
 		} else {
-			jobName = "pushgateway"
+			jobName = mts.GatewayJobName
 		}
 	}
 

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmagent/remotewrite"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/prometheus"
 	"net/url"
@@ -1279,7 +1278,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// dbproxy 不需要 ident tag
 	var tenant string
 	if at != nil {
-		t, ok := remotewrite.AuthTokenToTenant.Load(at.String())
+		t, ok := mts.AuthTokenToTenant.Load(at.String())
 		if !ok {
 			mts.MtsWarningMetrics.Inc()
 			return nil, fmt.Errorf("cannot find tenant for auth token %q", at)

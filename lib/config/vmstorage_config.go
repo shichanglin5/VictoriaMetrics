@@ -24,7 +24,7 @@ func InitVMStorageConfig() (context.CancelFunc, error) {
 	return LoadConfig(func(data []byte) error {
 		var c VMStorageConfig
 		if err := yaml.Unmarshal(data, &c); err != nil {
-			return fmt.Errorf("cannot unmarshal vmselect config: %w", err)
+			return fmt.Errorf("cannot unmarshal vmstorage config: %w", err)
 		}
 		VMStorageConfigVar.Store(&c)
 		return nil

@@ -3,6 +3,7 @@ package remotewrite
 import (
 	"flag"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mts"
 	"net/http"
 	"net/url"
@@ -162,8 +163,12 @@ var (
 //
 // Stop must be called for graceful shutdown.
 func Init() {
-	if mts.IsVmAgentOrPushGatewayType() {
+	if config.IsVmAgentRemoteWriteRuntimeConfigEnabled() {
 		overrideDefault = true
+		_, err := config.InitVMAgentConfig(loadRemoteWriteConfig)
+		if err != nil {
+			panic(err)
+		}
 	}
 	if *maxHourlySeries > 0 {
 		hourlySeriesLimiter = bloomfilter.NewLimiter(*maxHourlySeries, time.Hour)
@@ -210,10 +215,9 @@ func Init() {
 	initStreamAggrConfigGlobal()
 
 	if overrideDefault {
-		//reloadMtsConfig()
+		//reloadRemoteWritesConfig()
 	} else {
 		initRemoteWriteCtxs(*remoteWriteURLs)
-
 	}
 
 	disableOnDiskQueues := []bool(*disableOnDiskQueue)
@@ -322,27 +326,13 @@ func initRemoteWriteCtxs(urls []string) {
 	rwctxsGlobalIdx = rwctxIdx
 }
 
-var (
-	// remoteWriteCtxsMapping rwxKey -> *remoteWriteCtx
-	remoteWriteCtxsMapping = &sync.Map{}
-
-	// AuthTokenToRwctxs authToken(string) -> []*remoteWriteCtx
-	AuthTokenToRwctxs = &sync.Map{}
-
-	// AuthTokenToTenant authToken(string) -> tenant(string)
-	AuthTokenToTenant = &sync.Map{}
-
-	// TenantToAuthToken tenant(string) -> authToken(*auth.Token)
-	TenantToAuthToken = &sync.Map{}
-)
-
 // ReloadRemoteWriteCtxs mts 配置更新时动态创建 remote write ctx
 // 判断是否需要重新更新：
 // 1、tenant -> token 是否变化
 // 2、token -> tenant 是否变化
 // 3、cluster urls 是否变化
-func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string, tenantToIdcs map[string]map[string]struct{}) []*remoteWriteCtx {
-	maxInmemoryBlocks := memory.Allowed() / len(newTenantToAuthTokens) / *maxRowsPerBlock / 100
+func ReloadRemoteWriteCtxs(tenantAuthTokenMapping, writeIdcUrlMapping map[string]string, tenantWriteIdcListMapping map[string]map[string]struct{}) []*remoteWriteCtx {
+	maxInmemoryBlocks := memory.Allowed() / len(tenantAuthTokenMapping) / *maxRowsPerBlock / 100
 	if maxInmemoryBlocks / *queues > 100 {
 		// There is no much sense in keeping higher number of blocks in memory,
 		// since this means that the producer outperforms consumer and the queue
@@ -360,7 +350,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 	newAuthTokenToTenant := &sync.Map{}
 
 	shouldReload := false
-	for tenantName, tenantToken := range newTenantToAuthTokens {
+	for tenantName, tenantToken := range tenantAuthTokenMapping {
 		newToken, err := auth.NewToken(tenantToken)
 		if err != nil {
 			mts.MtsWarningMetrics.Inc()
@@ -374,9 +364,9 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 
 		// 遍历 urls 创建 remote write ctx
 		tenantRwctxs := make([]*remoteWriteCtx, 0)
-		for clusterIdc, clusterUrl := range clusterUrls {
+		for clusterIdc, clusterUrl := range writeIdcUrlMapping {
 			// 当配置 tenant 要写的 idc 时，判断是否属于该 tenant 配置的 idc，不属于则跳过
-			if tenantIdcs, ok := tenantToIdcs[tenantName]; ok {
+			if tenantIdcs, ok := tenantWriteIdcListMapping[tenantName]; ok {
 				if _, ok := tenantIdcs[clusterIdc]; !ok {
 					continue
 				}
@@ -391,7 +381,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 				continue
 			}
 			sanitizedURL := fmt.Sprintf("%s@%s", rwxKey, clusterUrl)
-			if rwctx, ok := remoteWriteCtxsMapping.Load(rwxKey); !ok {
+			if rwctx, ok := mts.RemoteWriteCtxsMapping.Load(rwxKey); !ok {
 				shouldReload = true
 				newRwctx := reloadRemoteWriteCtx(clusterIdc, tenantName, remoteWriteURL, maxInmemoryBlocks, sanitizedURL)
 				tenantRwctxs = append(tenantRwctxs, newRwctx)
@@ -415,7 +405,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 
 	// 找出清理 remote write ctx
 	toDeleteRWCtxs := make([]*remoteWriteCtx, 0)
-	remoteWriteCtxsMapping.Range(func(k, v interface{}) bool {
+	mts.RemoteWriteCtxsMapping.Range(func(k, v interface{}) bool {
 		if _, ok := newRemoteWriteCtxsMapping.Load(k); !ok {
 			shouldReload = true
 			toDeleteRWCtxs = append(toDeleteRWCtxs, v.(*remoteWriteCtx))
@@ -425,7 +415,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 
 	// 检查 tenant -> authToken 是否有变化
 	if !shouldReload {
-		TenantToAuthToken.Range(func(k, v any) bool {
+		mts.TenantToAuthToken.Range(func(k, v any) bool {
 			if t, ok := newTenantToAuthToken.Load(k); !ok {
 				// 如果 tenant 删除，需要 reload
 				shouldReload = true
@@ -436,7 +426,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 			return true
 		})
 		newTenantToAuthToken.Range(func(k, v any) bool {
-			if _, ok := TenantToAuthToken.Load(k); !ok {
+			if _, ok := mts.TenantToAuthToken.Load(k); !ok {
 				// 如果 tenant 删除，需要 reload
 				shouldReload = true
 			}
@@ -447,7 +437,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 	// 检查 authToken -> tenant 是否有变化
 	if !shouldReload {
 		AuthTokenToTenantSize := 0
-		AuthTokenToTenant.Range(func(k, v any) bool {
+		mts.AuthTokenToTenant.Range(func(k, v any) bool {
 			AuthTokenToTenantSize++
 			if t, ok := newAuthTokenToTenant.Load(k); !ok {
 				// 如果 authToken 删除，需要 reload
@@ -459,7 +449,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 			return true
 		})
 		newAuthTokenToTenant.Range(func(k, v any) bool {
-			if _, ok := AuthTokenToTenant.Load(k); !ok {
+			if _, ok := mts.AuthTokenToTenant.Load(k); !ok {
 				// 如果 authToken 删除，需要 reload
 				shouldReload = true
 			}
@@ -472,16 +462,16 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 	}
 
 	// 更新 authTokenToRwctxs
-	AuthTokenToRwctxs = newAuthTokenToRwctxs
+	mts.AuthTokenToRwctxs = newAuthTokenToRwctxs
 
-	// 更新 remoteWriteCtxsMapping
-	remoteWriteCtxsMapping = newRemoteWriteCtxsMapping
+	// 更新 mts.RemoteWriteCtxsMapping
+	mts.RemoteWriteCtxsMapping = newRemoteWriteCtxsMapping
 
 	// 更新 TenantToAuthToken
-	TenantToAuthToken = newTenantToAuthToken
+	mts.TenantToAuthToken = newTenantToAuthToken
 
 	// 更新 AuthTokenToTenant
-	AuthTokenToTenant = newAuthTokenToTenant
+	mts.AuthTokenToTenant = newAuthTokenToTenant
 
 	// 清理 remote write ctx
 	for _, rwctx := range toDeleteRWCtxs {
@@ -491,7 +481,7 @@ func ReloadRemoteWriteCtxs(newTenantToAuthTokens, clusterUrls map[string]string,
 
 	rwctxsGlobal = rwctxs
 	_ = remoteWriteURLs.Set("mts")
-	mts.FastQueueSize.Store(int64(len(rwctxsGlobal)))
+	FastQueueSize.Store(int64(len(rwctxsGlobal)))
 	return rwctxs
 }
 
@@ -591,7 +581,7 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	var ok bool
 	if overrideDefault {
 		var v any
-		v, ok = AuthTokenToRwctxs.Load(at.String())
+		v, ok = mts.AuthTokenToRwctxs.Load(at.String())
 		if ok {
 			rwctxs = v.([]*remoteWriteCtx)
 		}
@@ -601,6 +591,7 @@ func tryPush(at *auth.Token, wr *prompbmarshal.WriteRequest, forceDropSamplesOnF
 	if !ok {
 		// At least a single remote write queue is blocked and dropSamplesOnFailure isn't set.
 		// Return false to the caller, so it could re-send samples again.
+		remoteWriteCtxNotFound.Inc()
 		return false
 	}
 	if len(rwctxs) == 0 {
@@ -976,6 +967,7 @@ var logSkippedSeriesTicker = time.NewTicker(5 * time.Second)
 var (
 	globalRowsPushedBeforeRelabel = metrics.NewCounter("vmagent_remotewrite_global_rows_pushed_before_relabel_total")
 	rowsDroppedByGlobalRelabel    = metrics.NewCounter("vmagent_remotewrite_global_relabel_metrics_dropped_total")
+	remoteWriteCtxNotFound        = metrics.NewCounter("vmagent_remotewrite_tenant_ctx_not_found")
 )
 
 type remoteWriteCtx struct {

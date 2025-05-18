@@ -1,27 +1,28 @@
 package mts
 
 import (
-	"net/http"
-)
-
-const (
-	VmTenantToAuthTokens = "vmclusters_tenantToAuthTokens"
-	VmTenantToIdcs       = "vmclusters_tenantToIdcs"
-	VmClusterUrls        = "vmclusters_urls"
+	"errors"
+	"path"
 )
 
 type VmAgentConfig struct {
-	ClusterUrls        map[string]string `json:"vmclusters_urls"`
-	TenantToAuthTokens map[string]string `json:"vmclusters_tenantToAuthTokens"`
-	TenantToIdcs       map[string]string `json:"vmclusters_tenantToIdcs"`
+	WriteIdcUrlMapping        map[string]string `yaml:"writeIdcUrlMapping"`
+	TenantAuthTokenMapping    map[string]string `yaml:"tenantAuthTokenMapping"`
+	TenantWriteIdcListMapping map[string]string `yaml:"tenantWriteIdcListMapping"`
 }
 
 func LoadVmAgentConfig(configHandler func(configData *VmAgentConfig)) error {
-	return LoadConfig([]string{VmTenantToAuthTokens, VmClusterUrls, VmTenantToIdcs},
-		func(r *http.Request) {
-			query := r.URL.Query()
-			query.Set("multiGet", "true")
-			r.URL.RawQuery = query.Encode()
-		},
-		configHandler)
+	reqUrl := path.Join(MtsUrl, "config/vm/vm_agent_remotewrite.yaml")
+	return GetRequest(Cli, reqUrl, nil, func(respData *[]byte, mtsResult *MtsResponse[*VmAgentConfig]) error {
+		switch mtsResult.Code {
+		case 0:
+			// targets 发生变化，需要解析
+			result := mtsResult.Result
+			configHandler(result)
+			return nil
+		default:
+			MtsWarningMetrics.Inc()
+			return errors.New(mtsResult.Message)
+		}
+	})
 }

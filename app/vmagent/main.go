@@ -532,7 +532,7 @@ func getAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
 	}
-	authToken, ok := remotewrite.TenantToAuthToken.Load(tenant)
+	authToken, ok := mts.TenantToAuthToken.Load(tenant)
 	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
