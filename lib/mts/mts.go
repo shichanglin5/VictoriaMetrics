@@ -208,7 +208,7 @@ func initVars() {
 	}
 
 	ScrapeJobName = fmt.Sprintf("scrape-%s-%s", ScrapeGroup, ScrapeTenant)
-	GatewayJobName = fmt.Sprintf("gateway-%s", ScrapeGroup)
+	GatewayJobName = fmt.Sprintf("pushgateway-%s", ScrapeGroup)
 }
 
 func (c *MtsClient) IsStopping() bool {
