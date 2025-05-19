@@ -966,8 +966,8 @@ func (wc *writeRequestCtx) addAutoMetrics(sw *scrapeWork, am *autoMetrics, times
 		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_limit_samples_dropped", float64(am.seriesLimitSamplesDropped), timestamp)
 		dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_series_limit", float64(sl.MaxItems()), timestamp)
 	}
-	appendRow(dst, sw.Config.AutoMetricTags, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
-	appendRow(dst, sw.Config.AutoMetricTags, "target_up", float64(am.up), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
+	dst = appendRow(dst, sw.Config.AutoMetricTags, "target_up", float64(am.up), timestamp)
 
 	wc.addRows(sw.Config, dst, timestamp, false)
 
