@@ -7,7 +7,7 @@ RUN apk update && apk upgrade && apk --update --no-cache add ca-certificates
 FROM $root_image
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 EXPOSE 8429
-ENTRYPOINT ["/vmagent-prod"]
+ENTRYPOINT ["/vmagent"]
 ARG TARGETARCH
 ARG BINARY_SUFFIX=non-existing
-COPY vmagent-linux-${TARGETARCH}-prod${BINARY_SUFFIX} ./vmagent-prod
+COPY vmagent-linux-${TARGETARCH}-prod${BINARY_SUFFIX} ./vmagent
