@@ -326,12 +326,33 @@ func initRemoteWriteCtxs(urls []string) {
 	rwctxsGlobalIdx = rwctxIdx
 }
 
+var DefaultMaxPendingBytes int64
+var InitDefaultMaxPendingBytesOnce = sync.OnceFunc(func() {
+	fs.MustMkdirIfNotExist(*tmpDataPath)
+	// 如果 maxPendingBytes 为 0，则获取路径空闲空间
+	freeSpaceBytes := fs.MustGetFreeSpace(*tmpDataPath)
+	freeSpaceBytes -= freeSpaceBytes % persistentqueue.DefaultChunkFileSize
+	// 至少 500M, 最大 100G
+	if freeSpaceBytes < persistentqueue.DefaultChunkFileSize {
+		logger.Errorf("vmagent queue path not have enough free space, freeSpaceBytes: %d", freeSpaceBytes)
+		DefaultMaxPendingBytes = persistentqueue.DefaultChunkFileSize
+	} else if freeSpaceBytes > persistentqueue.DefaultChunkFileSize*200 {
+		DefaultMaxPendingBytes = persistentqueue.DefaultChunkFileSize * 200
+	}
+	logger.Infof("detected max pending bytes (freeSpaceBytes): %d", freeSpaceBytes)
+	_ = metrics.GetOrCreateGauge("vmagent_queue_default_max_pending_bytes", func() float64 {
+		return float64(DefaultMaxPendingBytes)
+	})
+})
+
 // ReloadRemoteWriteCtxs mts 配置更新时动态创建 remote write ctx
 // 判断是否需要重新更新：
 // 1、tenant -> token 是否变化
 // 2、token -> tenant 是否变化
 // 3、cluster urls 是否变化
 func ReloadRemoteWriteCtxs(tenantAuthTokenMapping, writeIdcUrlMapping map[string]string, tenantWriteIdcListMapping map[string]map[string]struct{}) []*remoteWriteCtx {
+	InitDefaultMaxPendingBytesOnce()
+
 	maxInmemoryBlocks := memory.Allowed() / len(tenantAuthTokenMapping) / *maxRowsPerBlock / 100
 	if maxInmemoryBlocks / *queues > 100 {
 		// There is no much sense in keeping higher number of blocks in memory,
@@ -1066,9 +1087,12 @@ func reloadRemoteWriteCtx(clusterIdc, tenantName string, remoteWriteURL *url.URL
 	pqURL.RawQuery = ""
 	pqURL.Fragment = ""
 	queuePath := filepath.Join(*tmpDataPath, persistentQueueDirname, fmt.Sprintf("%s_%s", clusterIdc, tenantName))
-	maxPendingBytes := persistentqueue.DefaultChunkFileSize
+	maxPendingBytes := maxPendingBytesPerURL.GetOptionalArg(0)
+	if maxPendingBytes == 0 {
+		maxPendingBytes = DefaultMaxPendingBytes
+	}
 
-	fq := persistentqueue.MustOpenFastQueue(queuePath, sanitizedURL, maxInmemoryBlocks, int64(maxPendingBytes), false)
+	fq := persistentqueue.MustOpenFastQueue(queuePath, sanitizedURL, maxInmemoryBlocks, maxPendingBytes, false)
 	_ = metrics.GetOrCreateGauge(fmt.Sprintf(`vmagent_remotewrite_pending_data_bytes{path=%q, url=%q}`, queuePath, sanitizedURL), func() float64 {
 		return float64(fq.GetPendingBytes())
 	})
