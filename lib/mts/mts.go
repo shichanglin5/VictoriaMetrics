@@ -315,11 +315,12 @@ func sendHeartbeat[REQ any](c *MtsClient, reqFactory func() REQ, respHandler fun
 	mainHeartbeatAddr := MtsUrl
 	continuesFailedCount := MainHeartbeatAddrFailedCount.Load()
 	var otherHeartbeatAddr []string
-	if len(rumtimeHeartbeatAddrs) > 0 && continuesFailedCount < 30 {
+	if len(rumtimeHeartbeatAddrs) > 0 {
 		mainHeartbeatAddr = rumtimeHeartbeatAddrs[0]
 		otherHeartbeatAddr = rumtimeHeartbeatAddrs[1:]
 	}
 	if continuesFailedCount >= 30 {
+		mainHeartbeatAddr = MtsUrl
 		logger.Warnf("mainHeartbeatAddr failed: %d, reset Heartbeat addr to MtsUrl: %s", continuesFailedCount, MtsUrl)
 	}
 	err := PostRequest(c, mainHeartbeatAddr+apiHeartbeat, req, nil, func(_ *[]byte, mtsResp *MtsResponse[*MtsClientConfig]) error {
@@ -341,6 +342,14 @@ func sendHeartbeat[REQ any](c *MtsClient, reqFactory func() REQ, respHandler fun
 					}
 					if len(parsedHeartbeatAddrs) > 0 {
 						runtimeHeartbeatAddrs.Store(parsedHeartbeatAddrs)
+						// 为了保证无论 pull Target url 配置的哪个实例，启动都能成功拉取，那么这里必须对其他 heartbeat addrs 也发送心跳
+						if len(otherHeartbeatAddr) == 0 {
+							for _, otherAddr := range parsedHeartbeatAddrs {
+								if otherAddr != mainHeartbeatAddr {
+									otherHeartbeatAddr = append(otherHeartbeatAddr, otherAddr)
+								}
+							}
+						}
 					} else {
 						// 默认使用 mts url
 						logger.Warnf("mts parse <HeartbeatAddrs> result array is emtpy, fallback to default: %v", MtsUrl)
