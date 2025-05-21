@@ -48,7 +48,7 @@ func LoadConfig(configParser func(data []byte) error) (context.CancelFunc, error
 	sighupCh := procutil.NewSighupChan()
 	_, err := loadConfig(configParser)
 	if err != nil {
-		logger.Fatalf("cannot load auth config: %s", err)
+		logger.Fatalf("cannot load runtime config: %s", err)
 	}
 
 	configSuccess.Set(1)
