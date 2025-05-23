@@ -32,7 +32,9 @@ var (
 	MetricsQueryNotMatchBlockedTotal = metrics.NewCounter(`vmselect_query_notMatchBlocked_total`)
 )
 var ErrBlockedQuery = errors.New("query is blocked! contact administator for more information")
-var ShouldBlockQuery func(string) bool
+var ShouldBlockQuery = func(s string) bool {
+	return false
+}
 
 type Labels map[string]struct{}
 
