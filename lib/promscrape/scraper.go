@@ -204,6 +204,10 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 			logger.Infof("SIGHUP received; reloading Prometheus configs from %q", configFile)
 			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
+				if IsCliStoppingErr(err) {
+					logger.Infof("skip load scrape config: mts client is stopping")
+					goto waitForChans
+				}
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
 				logger.Errorf("cannot read %q on SIGHUP: %s; continuing with the previous config", configFile, err)
@@ -225,6 +229,10 @@ func runScraper(configFile string, pushData func(at *auth.Token, wr *prompbmarsh
 		case <-tickerCh:
 			cfgNew, err := doLoadConfig(configFile)
 			if err != nil {
+				if IsCliStoppingErr(err) {
+					logger.Infof("skip load scrape config: mts client is stopping")
+					goto waitForChans
+				}
 				configReloadErrors.Inc()
 				configSuccess.Set(0)
 				logger.Errorf("cannot read %q: %s; continuing with the previous config", configFile, err)

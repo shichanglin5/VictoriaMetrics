@@ -41,12 +41,20 @@ func IsScrapeInitErr(err error) bool {
 	return err != nil && errors.Is(err, errGroupNotInitialized)
 }
 
+func IsCliStoppingErr(err error) bool {
+	return err != nil && errors.Is(err, errMtsClientStopping)
+}
+
 var errGroupNotInitialized error = errors.New("mts scrape group not initialized")
+var errMtsClientStopping error = errors.New("mts client is stopping")
 
 var sign = &mts.Md5Digest{Md5: "", Timestamp: 0}
 
 // loadConfig 如果 mts 下发配置变化，则返回 config 不为空，且 err 为空
 func loadScrapeConfig(_ string) (*Config, error) {
+	if mts.Cli.IsStopping() {
+		return nil, errMtsClientStopping
+	}
 	var cfg *Config
 	req := mts.MtsGetTargetsRequest{Ident: mts.Ident, Sign: sign.Signature(), Tenant: mts.ScrapeTenant, Group: mts.ScrapeGroup}
 	err := mts.PostRequest(mts.Cli, mts.GetPullTargetAddr()+apiGetTarget, req, nil, func(respData *[]byte, mtsResult *mts.MtsResponse[*mts.PullTargetResult]) error {
