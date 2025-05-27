@@ -292,7 +292,14 @@ func startHeartbeat[REQ any](c *MtsClient, reqFactory func() REQ, respHandler fu
 		for {
 			select {
 			case <-c.preStopCh:
-				err = sendHeartbeat(c, reqFactory, respHandler)
+				for i := 0; i < 3; i++ {
+					// 重试 3 次
+					err = sendHeartbeat(c, reqFactory, respHandler)
+					if err == nil {
+						break
+					}
+					time.Sleep(time.Second)
+				}
 				if err != nil {
 					MtsWarningMetrics.Inc()
 					logger.Warnf("mts final heartbeat failed: %s", err)
