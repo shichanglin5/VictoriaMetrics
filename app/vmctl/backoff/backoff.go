@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -50,7 +51,7 @@ func (b *Backoff) Retry(ctx context.Context, cb retryableFunc) (uint64, error) {
 		if err == nil {
 			return attempt, nil
 		}
-		if errors.Is(err, ErrBadRequest) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, ErrBadRequest) || errors.Is(err, context.Canceled) || strings.Contains(err.Error(), `unexpected response code 400`) {
 			logger.Errorf("unrecoverable error: %s", err)
 			return attempt, err // fail fast if not recoverable
 		}
