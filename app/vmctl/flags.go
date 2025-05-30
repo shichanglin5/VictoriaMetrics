@@ -424,9 +424,9 @@ const (
 	vmNativeFilterTimeReverse = "vm-native-filter-time-reverse"
 	vmNativeStepInterval      = "vm-native-step-interval"
 
-	vmNativeDisableBinaryProtocol     = "vm-native-disable-binary-protocol"
-	vmNativeDisableHTTPKeepAlive      = "vm-native-disable-http-keep-alive"
-	vmNativeDisablePerMetricMigration = "vm-native-disable-per-metric-migration"
+	vmNativeDisableBinaryProtocol = "vm-native-disable-binary-protocol"
+	vmNativeDisableHTTPKeepAlive  = "vm-native-disable-http-keep-alive"
+	vmNativeShardMigrationLabel   = "vm-native-shard-migration-label"
 
 	vmNativeSrcAddr               = "vm-native-src-addr"
 	vmNativeSrcUser               = "vm-native-src-user"
@@ -610,10 +610,10 @@ var (
 			Usage: "Number of workers concurrently performing import requests to VM",
 			Value: 2,
 		},
-		&cli.BoolFlag{
-			Name:  vmNativeDisablePerMetricMigration,
-			Usage: "Defines whether to disable per-metric migration and migrate all data via one connection. In this mode, vmctl makes less export/import requests, but can't provide a progress bar or retry failed requests.",
-			Value: false,
+		&cli.StringFlag{
+			Name:  vmNativeShardMigrationLabel,
+			Usage: "指定迁移数据时拆分任务的标签，比如有一个ident表示实例，可以通过指定 --vm-native-shard-label-name=ident 则按每个实例进行数据迁移；当指定该参数后",
+			Value: "",
 		},
 		&cli.BoolFlag{
 			Name: vmNativeDisableBinaryProtocol,

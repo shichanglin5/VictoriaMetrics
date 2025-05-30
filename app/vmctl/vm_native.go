@@ -33,7 +33,7 @@ type vmNativeProcessor struct {
 	cc           int
 	isNative     bool
 
-	disablePerMetricRequests bool
+	shardMigrationLabel string
 }
 
 const (
@@ -117,7 +117,7 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 		return fmt.Errorf("failed to init export pipe: %w", err)
 	}
 
-	if p.disablePerMetricRequests {
+	if p.shardMigrationLabel == "" {
 		pr := bar.NewProxyReader(reader)
 		if pr != nil {
 			reader = pr
@@ -131,6 +131,17 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 		importCh <- p.dst.ImportPipe(ctx, dstURL, pr)
 		close(importCh)
 	}()
+
+	select {
+	case err := <-importCh:
+		if err != nil {
+			return fmt.Errorf("failed to import %s: %w", f.String(), err)
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+
+	}
 
 	w := io.Writer(pw)
 	if p.rateLimit > 0 {
@@ -190,7 +201,7 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 
 	var foundSeriesMsg string
 	var requestsToMake int
-	var metrics = map[string][][]time.Time{
+	var labelValues = map[string][][]time.Time{
 		"": ranges,
 	}
 
@@ -200,24 +211,24 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		barPrefix = fmt.Sprintf("Requests to make for tenant %s", tenantID)
 	}
 
-	if !p.disablePerMetricRequests {
+	if p.shardMigrationLabel != "" {
 		format = fmt.Sprintf(nativeWithBackoffTpl, barPrefix)
-		metrics, err = p.explore(ctx, p.src, tenantID, ranges)
+		labelValues, err = p.explore(ctx, p.src, tenantID, ranges)
 		if err != nil {
 			return fmt.Errorf("failed to explore metric names: %s", err)
 		}
-		if len(metrics) == 0 {
-			errMsg := "no metrics found"
+		if len(labelValues) == 0 {
+			errMsg := "no labelValues found"
 			if tenantID != "" {
 				errMsg = fmt.Sprintf("%s for tenant id: %s", errMsg, tenantID)
 			}
 			log.Println(errMsg)
 			return nil
 		}
-		for _, m := range metrics {
+		for _, m := range labelValues {
 			requestsToMake += len(m)
 		}
-		foundSeriesMsg = fmt.Sprintf("Found %d unique metric names to import. Total import/export requests to make %d", len(metrics), requestsToMake)
+		foundSeriesMsg = fmt.Sprintf("Found %d unique label values to import. Total import/export requests to make %d", len(labelValues), requestsToMake)
 	}
 
 	if !p.interCluster {
@@ -244,7 +255,7 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		go func() {
 			defer wg.Done()
 			for f := range filterCh {
-				if !p.disablePerMetricRequests {
+				if p.shardMigrationLabel != "" {
 					if err := p.do(ctx, f, srcURL, dstURL, nil); err != nil {
 						errCh <- err
 						return
@@ -261,10 +272,10 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 	}
 
 	// any error breaks the import
-	for mName, mRanges := range metrics {
-		match, err := buildMatchWithFilter(p.filter.Match, mName)
+	for labelValue, mRanges := range labelValues {
+		match, err := buildMatchWithFilter(p.filter.Match, p.shardMigrationLabel, labelValue)
 		if err != nil {
-			logger.Errorf("failed to build filter %q for metric name %q: %s", p.filter.Match, mName, err)
+			logger.Errorf("failed to build filter %q for metric name %q: %s", p.filter.Match, labelValue, err)
 			continue
 		}
 
@@ -303,7 +314,7 @@ func (p *vmNativeProcessor) explore(ctx context.Context, src *native.Client, ten
 
 	metrics := make(map[string][][]time.Time)
 	for _, r := range ranges {
-		ms, err := src.Explore(ctx, p.filter, tenantID, r[0], r[1])
+		ms, err := src.Explore(ctx, p.filter, tenantID, r[0], r[1], p.shardMigrationLabel)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get metrics from %s on interval %v-%v: %w", src.Addr, r[0], r[1], err)
 		}
@@ -361,23 +372,23 @@ func byteCountSI(b int64) string {
 		float64(b)/float64(div), "kMGTPE"[exp])
 }
 
-func buildMatchWithFilter(filter string, metricName string) (string, error) {
+func buildMatchWithFilter(filter string, shardMigrationLabelName, shardMigrationLabelValue string) (string, error) {
 	tfss, err := searchutil.ParseMetricSelector(filter)
 	if err != nil {
 		return "", err
 	}
 
-	if filter == metricName || metricName == "" {
+	if filter == shardMigrationLabelValue || shardMigrationLabelValue == "" {
 		return filter, nil
 	}
 
-	nameFilter := fmt.Sprintf("__name__=%q", metricName)
+	nameFilter := fmt.Sprintf("%s=%q", shardMigrationLabelName, shardMigrationLabelValue)
 
 	var filters []string
 	for _, tfs := range tfss {
 		var a []string
 		for _, tf := range tfs {
-			if len(tf.Key) == 0 {
+			if string(tf.Key) == shardMigrationLabelName {
 				continue
 			}
 			a = append(a, tf.String())
