@@ -375,10 +375,10 @@ func main() {
 							ExtraLabels: dstExtraLabels,
 							HTTPClient:  dstHTTPClient,
 						},
-						backoff:                  bf,
-						cc:                       c.Int(vmConcurrency),
-						disablePerMetricRequests: c.Bool(vmNativeDisablePerMetricMigration),
-						isNative:                 !c.Bool(vmNativeDisableBinaryProtocol),
+						backoff:             bf,
+						cc:                  c.Int(vmConcurrency),
+						shardMigrationLabel: c.String(vmNativeShardMigrationLabel),
+						isNative:            !c.Bool(vmNativeDisableBinaryProtocol),
 					}
 					return p.run(ctx)
 				},

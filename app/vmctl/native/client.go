@@ -13,16 +13,17 @@ import (
 
 const (
 	nativeTenantsAddr     = "admin/tenants"
-	nativeMetricNamesAddr = "api/v1/label/__name__/values"
+	labelValuesAddrFormat = "api/v1/label/%s/values"
 )
 
 // Client is an HTTP client for exporting and importing
 // time series via native protocol.
 type Client struct {
-	AuthCfg     *auth.Config
-	Addr        string
-	ExtraLabels []string
-	HTTPClient  *http.Client
+	AuthCfg        *auth.Config
+	Addr           string
+	ExtraLabels    []string
+	ShardLabelName string
+	HTTPClient     *http.Client
 }
 
 // LabelValues represents series from api/v1/series response
@@ -35,10 +36,11 @@ type Response struct {
 }
 
 // Explore finds metric names by provided filter from api/v1/label/__name__/values
-func (c *Client) Explore(ctx context.Context, f Filter, tenantID string, start, end time.Time) ([]string, error) {
-	url := fmt.Sprintf("%s/%s", c.Addr, nativeMetricNamesAddr)
+func (c *Client) Explore(ctx context.Context, f Filter, tenantID string, start, end time.Time, shardMigrationLabel string) ([]string, error) {
+	labelValuesAddr := fmt.Sprintf(labelValuesAddrFormat, shardMigrationLabel)
+	url := fmt.Sprintf("%s/%s", c.Addr, labelValuesAddr)
 	if tenantID != "" {
-		url = fmt.Sprintf("%s/select/%s/prometheus/%s", c.Addr, tenantID, nativeMetricNamesAddr)
+		url = fmt.Sprintf("%s/select/%s/prometheus/%s", c.Addr, tenantID, labelValuesAddr)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
