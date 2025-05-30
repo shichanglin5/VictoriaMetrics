@@ -279,10 +279,6 @@ func main() {
 				Action: func(c *cli.Context) error {
 					fmt.Println("VictoriaMetrics Native import mode")
 
-					if c.String(vmNativeFilterMatch) == "" {
-						return fmt.Errorf("flag %q can't be empty", vmNativeFilterMatch)
-					}
-
 					bfRetries := c.Int(vmNativeBackoffRetries)
 					bfFactor := c.Float64(vmNativeBackoffFactor)
 					bfMinDuration := c.Duration(vmNativeBackoffMinDuration)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"io"
 	"log"
 	"strings"
@@ -367,9 +368,13 @@ func byteCountSI(b int64) string {
 }
 
 func buildMatchWithFilter(filter string, shardMigrationLabelName, shardMigrationLabelValue string) (string, error) {
-	tfss, err := searchutil.ParseMetricSelector(filter)
-	if err != nil {
-		return "", err
+	var tfss [][]storage.TagFilter
+	var err error
+	if filter != "" {
+		tfss, err = searchutil.ParseMetricSelector(filter)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if filter == shardMigrationLabelValue || shardMigrationLabelValue == "" {
@@ -377,6 +382,9 @@ func buildMatchWithFilter(filter string, shardMigrationLabelName, shardMigration
 	}
 
 	nameFilter := fmt.Sprintf("%s=%q", shardMigrationLabelName, shardMigrationLabelValue)
+	if len(tfss) == 0 {
+		return fmt.Sprintf("{%s}", nameFilter), nil
+	}
 
 	var filters []string
 	for _, tfs := range tfss {

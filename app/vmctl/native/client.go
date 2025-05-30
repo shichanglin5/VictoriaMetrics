@@ -50,7 +50,9 @@ func (c *Client) Explore(ctx context.Context, f Filter, tenantID string, start, 
 	params := req.URL.Query()
 	params.Set("start", start.Format(time.RFC3339))
 	params.Set("end", end.Format(time.RFC3339))
-	params.Set("match[]", f.Match)
+	if f.Match != "" {
+		params.Set("match[]", f.Match)
+	}
 	req.URL.RawQuery = params.Encode()
 
 	resp, err := c.do(req, http.StatusOK)
