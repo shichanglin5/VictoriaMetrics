@@ -424,6 +424,7 @@ const (
 	vmNativeFilterTimeReverse = "vm-native-filter-time-reverse"
 	vmNativeStepInterval      = "vm-native-step-interval"
 
+	vmNativeSplitRangeAlignToStep = "vm-native-split-range-align-to-step"
 	vmNativeDisableBinaryProtocol = "vm-native-disable-binary-protocol"
 	vmNativeDisableHTTPKeepAlive  = "vm-native-disable-http-keep-alive"
 	vmNativeShardMigrationLabel   = "vm-native-shard-migration-label"
@@ -614,6 +615,11 @@ var (
 			Name:  vmNativeShardMigrationLabel,
 			Usage: "指定迁移数据时拆分任务的标签，比如有一个ident表示实例，可以通过指定 --vm-native-shard-label-name=ident 则按每个实例进行数据迁移；当指定该参数后",
 			Value: "",
+		},
+		&cli.BoolFlag{
+			Name:  vmNativeSplitRangeAlignToStep,
+			Usage: "设置为true后，则会自动将 end 设置为 start + 一个 step 对应的值",
+			Value: false,
 		},
 		&cli.BoolFlag{
 			Name: vmNativeDisableBinaryProtocol,

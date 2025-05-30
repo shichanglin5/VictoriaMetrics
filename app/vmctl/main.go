@@ -375,6 +375,7 @@ func main() {
 						cc:                  c.Int(vmConcurrency),
 						shardMigrationLabel: c.String(vmNativeShardMigrationLabel),
 						isNative:            !c.Bool(vmNativeDisableBinaryProtocol),
+						alignToStep:         c.Bool(vmNativeSplitRangeAlignToStep),
 					}
 					return p.run(ctx)
 				},
