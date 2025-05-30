@@ -172,7 +172,6 @@ func Init() {
 			case <-signals:
 				signal.Stop(signals)
 				close(Cli.preStopCh)
-				logger.Infof("mts receive signal, start to exit")
 				Cli.stopping.Store(true)
 				if *shutdownDelay > 0 {
 					logger.Infof("mts waiting for shutdown delay: %s seconds", shutdownDelay.String())
@@ -292,6 +291,7 @@ func startHeartbeat[REQ any](c *MtsClient, reqFactory func() REQ, respHandler fu
 		for {
 			select {
 			case <-c.preStopCh:
+				logger.Infof("mts preStopCh event: send final heartbeat.")
 				for i := 0; i < 3; i++ {
 					// 重试 3 次
 					err = sendHeartbeat(c, reqFactory, respHandler)
@@ -304,6 +304,7 @@ func startHeartbeat[REQ any](c *MtsClient, reqFactory func() REQ, respHandler fu
 					MtsWarningMetrics.Inc()
 					logger.Warnf("mts final heartbeat failed: %s", err)
 				}
+				logger.Infof("send final heartbeat success.")
 				return
 			case <-c.stopCh:
 				return
