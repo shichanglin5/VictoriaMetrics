@@ -132,17 +132,6 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 		close(importCh)
 	}()
 
-	select {
-	case err := <-importCh:
-		if err != nil {
-			return fmt.Errorf("failed to import %s: %w", f.String(), err)
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-
-	}
-
 	w := io.Writer(pw)
 	if p.rateLimit > 0 {
 		rl := limiter.NewLimiter(p.rateLimit)
@@ -151,7 +140,12 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 
 	written, err := io.Copy(w, reader)
 	if err != nil {
-		return fmt.Errorf("failed to write into %q: %s", p.dst.Addr, err)
+		select {
+		case err = <-importCh:
+			return fmt.Errorf("failed to write into %q: error from import pipeline: %s", p.dst.Addr, err)
+		default:
+			return fmt.Errorf("failed to write into %q: %s", p.dst.Addr, err)
+		}
 	}
 
 	p.s.Lock()
