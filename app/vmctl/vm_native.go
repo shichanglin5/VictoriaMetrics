@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"io"
 	"log"
+	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +39,7 @@ type vmNativeProcessor struct {
 	isNative     bool
 	alignToStep  bool
 
+	continueOnRestart   bool
 	shardMigrationLabel string
 }
 
@@ -73,6 +78,12 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 			return fmt.Errorf("failed to create date ranges for the given time filters: %w", err)
 		}
 	}
+
+	processedKeysCache := p.loadLastProcessedKeysCache()
+	defer func() {
+		p.saveProcessedKeysCache(processedKeysCache)
+	}()
+
 	tenants := []string{""}
 	if p.interCluster {
 		log.Printf("Discovering tenants...")
@@ -87,7 +98,7 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 	}
 
 	for _, tenantID := range tenants {
-		err := p.runBackfilling(ctx, tenantID, ranges)
+		err := p.runBackfilling(ctx, tenantID, ranges, processedKeysCache)
 		if err != nil {
 			return fmt.Errorf("migration failed: %s", err)
 		}
@@ -97,6 +108,79 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 	log.Print(p.s)
 
 	return nil
+}
+
+func (p *vmNativeProcessor) saveProcessedKeysCache(processedKeysCache *sync.Map) {
+	if processedKeysCache == nil {
+		logger.Infof("skipping save processedKeys because processedKeysCache is nil")
+		return
+	}
+
+	processedKeys := make([]string, 0, 1024)
+	processedKeysCache.Range(func(k, v interface{}) bool {
+		processedKeys = append(processedKeys, k.(string))
+		return true
+	})
+	if len(processedKeys) == 0 {
+		logger.Infof("skipping save processedKeys because no processed keys cached")
+		return
+	}
+
+	marshalBytes, err := json.Marshal(processedKeys)
+	if err != nil {
+		logger.Errorf("failed to marshal processedKeys: %s", err)
+		return
+	}
+
+	migrationFileName := p.getMigrationContiueOnRestartFilepath()
+	err = os.MkdirAll(path.Dir(migrationFileName), 0755)
+	if err != nil {
+		logger.Errorf("failed to create directory %s: %s", path.Dir(migrationFileName), err)
+		return
+	}
+	file, err := os.Create(migrationFileName)
+	if err != nil {
+		logger.Errorf("failed to create directory %s: %s", path.Dir(migrationFileName), err)
+		return
+	}
+	_, err = file.Write(marshalBytes)
+	if err != nil {
+		logger.Errorf("failed to save processedKeys: %s", err)
+		return
+	}
+
+	logger.Infof("saved processedKeys: %s, keys count: %d", migrationFileName, len(processedKeys))
+}
+
+func (p *vmNativeProcessor) loadLastProcessedKeysCache() *sync.Map {
+	var processedKeysCache sync.Map
+	if p.continueOnRestart {
+		migrationFileName := p.getMigrationContiueOnRestartFilepath()
+		fileContent, err := os.ReadFile(migrationFileName)
+		if err != nil {
+			if os.IsNotExist(err) {
+				logger.Infof("skipping loading last migration processed keys from file[%s] because it doesn't exist", migrationFileName)
+				return &processedKeysCache
+			} else {
+				logger.Fatalf("cannot read last migration processed keys from file[%s]: %v", migrationFileName, err)
+			}
+		}
+		processKeys := make([]string, 0, 1024)
+		err = json.Unmarshal(fileContent, &processKeys)
+		if err != nil {
+			logger.Fatalf("cannot parse last migration processed keys from file[%s]: %w", migrationFileName, err)
+		}
+		logger.Infof("loaded last migration processed keys from file[%s], processed keys count: %d", migrationFileName, len(processKeys))
+		for _, processedKey := range processKeys {
+			processedKeysCache.Store(processedKey, struct{}{})
+		}
+	}
+	return &processedKeysCache
+}
+
+func (p *vmNativeProcessor) getMigrationContiueOnRestartFilepath() string {
+	migrationTaskMd5 := fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("<%s><%s><%s><%s><%s><%v>", p.filter.TimeStart, p.filter.TimeEnd, p.filter.Chunk, p.filter.Match, p.shardMigrationLabel, p.interCluster))))
+	return path.Join("vmctl_migration_continue_on_restart", migrationTaskMd5)
 }
 
 func (p *vmNativeProcessor) do(ctx context.Context, f native.Filter, srcURL, dstURL string, bar barpool.Bar) error {
@@ -162,7 +246,7 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 	return <-importCh
 }
 
-func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string, ranges [][]time.Time) error {
+func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string, ranges [][]time.Time, processedKeysCache *sync.Map) error {
 	exportAddr := nativeExportAddr
 	importAddr := nativeImportAddr
 	if p.isNative {
@@ -251,11 +335,19 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		go func() {
 			defer wg.Done()
 			for f := range filterCh {
+				cacheKey := fmt.Sprintf("tenant<%s>, match<%s>, timeStart<%s>, timeEnd<%s>", tenantID, f.Match, f.TimeStart, f.TimeEnd)
+				if _, ok := processedKeysCache.Load(cacheKey); ok {
+					//logger.Infof("skipping processed key %q, because it has been process in last migration.", cacheKey)
+					bar.Increment()
+					continue
+				}
+
 				if p.shardMigrationLabel != "" {
 					if err := p.do(ctx, f, srcURL, dstURL, nil); err != nil {
 						errCh <- err
 						return
 					}
+					processedKeysCache.Store(cacheKey, true)
 					bar.Increment()
 				} else {
 					if err := p.runSingle(ctx, f, srcURL, dstURL, bar); err != nil {
@@ -268,6 +360,7 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 	}
 
 	// any error breaks the import
+	loopCount := 0
 	for labelValue, mRanges := range labelValues {
 		match, err := buildMatchWithFilter(p.filter.Match, p.shardMigrationLabel, labelValue)
 		if err != nil {
@@ -276,6 +369,11 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		}
 
 		for _, times := range mRanges {
+			loopCount++
+			if loopCount%50 == 0 {
+				// save processKeys cache every 50 loops
+				p.saveProcessedKeysCache(processedKeysCache)
+			}
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("context canceled")

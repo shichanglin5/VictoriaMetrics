@@ -373,6 +373,7 @@ func main() {
 						},
 						backoff:             bf,
 						cc:                  c.Int(vmConcurrency),
+						continueOnRestart:   c.Bool(vmNativeContinueOnRestart),
 						shardMigrationLabel: c.String(vmNativeShardMigrationLabel),
 						isNative:            !c.Bool(vmNativeDisableBinaryProtocol),
 						alignToStep:         c.Bool(vmNativeSplitRangeAlignToStep),

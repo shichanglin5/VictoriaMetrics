@@ -428,6 +428,7 @@ const (
 	vmNativeDisableBinaryProtocol = "vm-native-disable-binary-protocol"
 	vmNativeDisableHTTPKeepAlive  = "vm-native-disable-http-keep-alive"
 	vmNativeShardMigrationLabel   = "vm-native-shard-migration-label"
+	vmNativeContinueOnRestart     = "vm-native-continue-on-restart"
 
 	vmNativeSrcAddr               = "vm-native-src-addr"
 	vmNativeSrcUser               = "vm-native-src-user"
@@ -610,6 +611,11 @@ var (
 			Name:  vmConcurrency,
 			Usage: "Number of workers concurrently performing import requests to VM",
 			Value: 2,
+		},
+		&cli.BoolFlag{
+			Name:  vmNativeContinueOnRestart,
+			Usage: "迁移失败退出后，下次迁移接着上一次迁移进度进行，避免对已经迁移的数据重复迁移，类似断点续传",
+			Value: true,
 		},
 		&cli.StringFlag{
 			Name:  vmNativeShardMigrationLabel,
