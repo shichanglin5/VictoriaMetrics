@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"io"
 	"net/http"
 	"time"
@@ -55,6 +56,7 @@ func (c *Client) Explore(ctx context.Context, f Filter, tenantID string, start, 
 	}
 	req.URL.RawQuery = params.Encode()
 
+	logger.Infof("Exploring metrics: Request to: %s", req.URL.String())
 	resp, err := c.do(req, http.StatusOK)
 	if err != nil {
 		return nil, fmt.Errorf("series request failed: %s", err)
