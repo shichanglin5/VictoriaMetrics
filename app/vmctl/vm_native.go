@@ -203,13 +203,13 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 		return fmt.Errorf("failed to init export pipe: %w", err)
 	}
 
-	if p.shardMigrationLabel == "" {
-		pr := bar.NewProxyReader(reader)
-		if pr != nil {
-			reader = pr
-			fmt.Printf("Continue import process with filter %s:\n", f.String())
-		}
-	}
+	//if p.shardMigrationLabel == "" {
+	//	pr := bar.NewProxyReader(reader)
+	//	if pr != nil {
+	//		reader = pr
+	//		fmt.Printf("Continue import process with filter %s:\n", f.String())
+	//	}
+	//}
 
 	pr, pw := io.Pipe()
 	importCh := make(chan error)
@@ -285,12 +285,12 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		"": ranges,
 	}
 
-	format := nativeSingleProcessTpl
 	barPrefix := "Requests to make"
 	if p.interCluster {
 		barPrefix = fmt.Sprintf("Requests to make for tenant %s", tenantID)
 	}
 
+	format := fmt.Sprintf(nativeWithBackoffTpl, barPrefix)
 	if p.shardMigrationLabel != "" {
 		format = fmt.Sprintf(nativeWithBackoffTpl, barPrefix)
 		labelValues, err = p.explore(ctx, p.src, tenantID, ranges)
@@ -309,6 +309,8 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 			requestsToMake += len(m)
 		}
 		foundSeriesMsg = fmt.Sprintf("Found %d unique label values to import. Total import/export requests to make %d", len(labelValues), requestsToMake)
+	} else {
+		requestsToMake = len(ranges)
 	}
 
 	if !p.interCluster {
@@ -350,10 +352,11 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 					processedKeysCache.Store(cacheKey, true)
 					bar.Increment()
 				} else {
-					if err := p.runSingle(ctx, f, srcURL, dstURL, bar); err != nil {
+					if err := p.runSingle(ctx, f, srcURL, dstURL, nil); err != nil {
 						errCh <- err
 						return
 					}
+					bar.Increment()
 				}
 			}
 		}()
@@ -476,12 +479,11 @@ func buildMatchWithFilter(filter string, shardMigrationLabelName, shardMigration
 		}
 	}
 
-	if filter == shardMigrationLabelValue || shardMigrationLabelValue == "" {
-		return filter, nil
-	}
-
 	nameFilter := fmt.Sprintf("%s=%q", shardMigrationLabelName, shardMigrationLabelValue)
 	if len(tfss) == 0 {
+		if shardMigrationLabelValue == "" {
+			return "{__name__=~\".+\"}", nil
+		}
 		return fmt.Sprintf("{%s}", nameFilter), nil
 	}
 
