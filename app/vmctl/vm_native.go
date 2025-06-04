@@ -368,6 +368,7 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		for {
 			select {
 			case <-tick:
+				p.saveProcessedKeysCache(processedKeysCache)
 				logger.Infof("定时打印同步统计：\n%s", p.s)
 			case <-ctx.Done():
 				return
@@ -378,7 +379,6 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 	}()
 
 	// any error breaks the import
-	loopCount := 0
 	for labelValue, mRanges := range labelValues {
 		match, err := buildMatchWithFilter(p.filter.Match, p.shardMigrationLabel, labelValue)
 		if err != nil {
@@ -387,11 +387,6 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		}
 
 		for _, times := range mRanges {
-			loopCount++
-			if loopCount%50 == 0 {
-				// save processKeys cache every 50 loops
-				p.saveProcessedKeysCache(processedKeysCache)
-			}
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("context canceled")
