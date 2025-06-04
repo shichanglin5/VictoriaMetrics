@@ -362,6 +362,21 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		}()
 	}
 
+	// 每分钟（并且loopCount大于 50）打印传输信息
+	go func() {
+		tick := time.Tick(time.Minute)
+		for {
+			select {
+			case <-tick:
+				logger.Infof("定时打印同步统计：\n%s", p.s)
+			case <-ctx.Done():
+				return
+			case _ = <-errCh:
+				return
+			}
+		}
+	}()
+
 	// any error breaks the import
 	loopCount := 0
 	for labelValue, mRanges := range labelValues {
