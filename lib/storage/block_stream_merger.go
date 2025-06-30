@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"io"
-	"time"
 )
 
 // blockStreamMerger is used for merging block streams.
@@ -78,8 +77,12 @@ func (bsm *blockStreamMerger) getRetentionDeadline(bh *blockHeader) int64 {
 	vmStorageConfig := config.VMStorageConfigVar.Load()
 	if vmStorageConfig != nil {
 		tenant := fmt.Sprintf("%d:%d", bh.TSID.AccountID, bh.TSID.ProjectID)
-		if tenantPeriod, ok := vmStorageConfig.TenantRetentionPeriod[tenant]; ok && tenantPeriod > 0 {
-			return timestampFromTime(time.Now()) - time.Duration(tenantPeriod).Milliseconds()
+		if tenantConfig, ok := (*vmStorageConfig)[tenant]; ok && tenantConfig != nil {
+			tenantRetentionDeadline := tenantConfig.GetRetentionDeadline()
+			if tenantRetentionDeadline == 0 {
+				return bsm.retentionDeadline
+			}
+			return tenantRetentionDeadline
 		}
 	}
 	return bsm.retentionDeadline

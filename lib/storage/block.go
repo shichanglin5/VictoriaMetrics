@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/config"
 	"sync"
 	"sync/atomic"
 
@@ -36,6 +37,50 @@ type Block struct {
 
 	// Marshaled representation of values.
 	valuesData []byte
+}
+
+func (b *Block) isDedupEnabled() bool {
+	if globalDedupInterval > 0 {
+		return true
+	}
+	vmStorageConfig := config.GetVmStorageConfig()
+	if vmStorageConfig == nil {
+		return false
+	}
+	authTokenStr := fmt.Sprintf("%d:%d", b.bh.TSID.AccountID, b.bh.TSID.ProjectID)
+	if tenantConfig, ok := (*vmStorageConfig)[authTokenStr]; !ok {
+		return false
+	} else {
+		tenantDedupInterval := tenantConfig.GetDedupInterval()
+		if tenantDedupInterval > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Block) GetDedupInterval() int64 {
+	vmStorageConfig := config.GetVmStorageConfig()
+	if vmStorageConfig == nil {
+		return globalDedupInterval
+	}
+	authTokenStr := fmt.Sprintf("%d:%d", b.bh.TSID.AccountID, b.bh.TSID.ProjectID)
+	if tenantConfig, ok := (*vmStorageConfig)[authTokenStr]; !ok {
+		return globalDedupInterval
+	} else {
+		if b.bh.MaxTimestamp < tenantConfig.GetMinDownsampleTimeAfterMs() {
+			for _, downsampleConfig := range tenantConfig.DownsamplingConfigs {
+				if downsampleConfig.Match(b.bh.MaxTimestamp, b.bh.TSID) {
+					return downsampleConfig.GetDedupInterval()
+				}
+			}
+		}
+		tenantDedupInterval := tenantConfig.GetDedupInterval()
+		if tenantDedupInterval > 0 {
+			return tenantDedupInterval
+		}
+		return globalDedupInterval
+	}
 }
 
 // Reset resets b.
@@ -149,9 +194,10 @@ func (b *Block) tooBig() bool {
 	return false
 }
 
-func (b *Block) deduplicateSamplesDuringMerge() {
-	if !isDedupEnabled() {
-		// Deduplication is disabled
+func (b *Block) deduplicateSamplesDuringMerge(dstPh *partHeader) {
+	dedupInterval := b.GetDedupInterval()
+	if dedupInterval <= 0 {
+		// Deduplication is disabled.
 		return
 	}
 	// Unmarshal block if it isn't unmarshaled yet in order to apply the de-duplication to unmarshaled samples.
@@ -163,11 +209,12 @@ func (b *Block) deduplicateSamplesDuringMerge() {
 		// Nothing to dedup.
 		return
 	}
-	dedupInterval := GetDedupInterval()
-	if dedupInterval <= 0 {
-		// Deduplication is disabled.
-		return
+
+	// 更新 minDedupInterval
+	if dstPh.MinDedupInterval > dedupInterval {
+		dstPh.MinDedupInterval = dedupInterval
 	}
+
 	srcValues := b.values[b.nextIdx:]
 	timestamps, values := deduplicateSamplesDuringMerge(srcTimestamps, srcValues, dedupInterval)
 	dedups := len(srcTimestamps) - len(timestamps)

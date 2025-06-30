@@ -1588,7 +1588,9 @@ func (pt *partition) mergePartsInternal(dstPartPath string, bsw *blockStreamWrit
 		return nil, fmt.Errorf("cannot merge %d parts to %s: %w", len(bsrs), dstPartPath, err)
 	}
 	if dstPartPath != "" {
-		ph.MinDedupInterval = GetDedupInterval()
+		if ph.MinDedupInterval == 0 {
+			ph.MinDedupInterval = GetDedupInterval()
+		}
 		ph.MustWriteMetadata(dstPartPath)
 	}
 	return &ph, nil

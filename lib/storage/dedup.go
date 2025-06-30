@@ -15,6 +15,10 @@ func SetDedupInterval(dedupInterval time.Duration) {
 	globalDedupInterval = dedupInterval.Milliseconds()
 }
 
+func GetQueryDedupInterval() int64 {
+	return globalDedupInterval
+}
+
 // GetDedupInterval returns the dedup interval in milliseconds, which has been set via SetDedupInterval.
 func GetDedupInterval() int64 {
 	return globalDedupInterval

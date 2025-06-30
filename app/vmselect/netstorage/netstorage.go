@@ -477,7 +477,7 @@ func (pts *packedTimeseries) Unpack(dst *Result, tbfs []*tmpBlocksFile, tr stora
 		putSortBlocksHeap(sbh)
 		return err
 	}
-	dedupInterval := storage.GetDedupInterval()
+	dedupInterval := storage.GetQueryDedupInterval()
 	mergeSortBlocks(dst, sbh, dedupInterval)
 	putSortBlocksHeap(sbh)
 	return nil

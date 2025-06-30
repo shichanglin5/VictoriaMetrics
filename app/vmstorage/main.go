@@ -147,6 +147,7 @@ func main() {
 		TrackMetricNamesStats: *trackMetricNamesStats,
 	}
 	strg := storage.MustOpenStorage(*storageDataPath, opts)
+	strg.SearchMetricNames()
 	initStaleSnapshotsRemover(strg)
 
 	var m storage.Metrics
