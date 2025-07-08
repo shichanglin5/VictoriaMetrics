@@ -208,11 +208,16 @@ func main() {
 func getOpenTSDBHTTPInsertHandler() func(req *http.Request) error {
 	if !remotewrite.MultitenancyEnabled() {
 		return func(req *http.Request) error {
+			authToken, err := getAuthToken(req, "default")
+			if err != nil {
+				return err
+			}
 			path := strings.Replace(req.URL.Path, "//", "/", -1)
 			if path != "/api/put" {
 				return fmt.Errorf("unsupported path requested: %q; expecting '/api/put'", path)
 			}
-			return opentsdbhttp.InsertHandler(nil, req)
+			opentsdbWriteRequests.Inc()
+			return opentsdbhttp.InsertHandler(authToken, req)
 		}
 	}
 	return func(req *http.Request) error {
@@ -264,7 +269,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 
 	path := strings.Replace(r.URL.Path, "//", "/", -1)
 	if strings.HasPrefix(path, "/prometheus/api/v1/import/prometheus") || strings.HasPrefix(path, "/api/v1/import/prometheus") {
-		authToken := getAuthToken(w, r)
+		authToken := GetAuthToken(w, r)
 		if authToken == nil {
 			return true
 		}
@@ -294,7 +299,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		if protoparserutil.HandleVMProtoServerHandshake(w, r) {
 			return true
 		}
-		authToken := getAuthToken(w, r)
+		authToken := GetAuthToken(w, r)
 		if authToken == nil {
 			return true
 		}
@@ -526,18 +531,28 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 	}
 }
 
-func getAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
+func getAuthToken(r *http.Request, defaultWhenEmpty string) (*auth.Token, error) {
 	tenant := r.Header.Get("X-Scope-OrgID")
 	if len(tenant) == 0 {
-		w.WriteHeader(http.StatusUnauthorized)
-		return nil
+		if defaultWhenEmpty == "" {
+			return nil, fmt.Errorf("missing X-Scope-OrgID header")
+		}
+		tenant = defaultWhenEmpty
 	}
 	authToken, ok := mts.TenantToAuthToken.Load(tenant)
 	if !ok {
+		return nil, fmt.Errorf("X-Scope-OrgID not authorized")
+	}
+	return authToken.(*auth.Token), nil
+}
+
+func GetAuthToken(w http.ResponseWriter, r *http.Request) *auth.Token {
+	authToken, err := getAuthToken(r, "")
+	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
 	}
-	return authToken.(*auth.Token)
+	return authToken
 }
 
 func processMultitenantRequest(w http.ResponseWriter, r *http.Request, path string) bool {
@@ -724,6 +739,8 @@ func processMultitenantRequest(w http.ResponseWriter, r *http.Request, path stri
 var (
 	prometheusWriteRequests = metrics.NewCounter(`vmagent_http_requests_total{path="/api/v1/write", protocol="promremotewrite"}`)
 	prometheusWriteErrors   = metrics.NewCounter(`vmagent_http_request_errors_total{path="/api/v1/write", protocol="promremotewrite"}`)
+
+	opentsdbWriteRequests = metrics.NewCounter(`vmagent_http_requests_total{path="/api/v1/write", protocol="opentsdb"}`)
 
 	vmimportRequests = metrics.NewCounter(`vmagent_http_requests_total{path="/api/v1/import", protocol="vmimport"}`)
 	vmimportErrors   = metrics.NewCounter(`vmagent_http_request_errors_total{path="/api/v1/import", protocol="vmimport"}`)
