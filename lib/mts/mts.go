@@ -191,6 +191,10 @@ func initVars() {
 	if len(ScrapeGroup) > 0 {
 		ScrapeGroup = strings.TrimSpace(ScrapeGroup)
 		logger.Infof("load mts scrape group from env(IDC): %s", ScrapeGroup)
+	} else {
+		ScrapeGroup = os.Getenv("DAOKE_LOGIC_IDC")
+		ScrapeGroup = strings.TrimSpace(ScrapeGroup)
+		logger.Infof("load mts scrape group from env(DAOKE_LOGIC_IDC): %s", ScrapeGroup)
 	}
 
 	// scrape group
