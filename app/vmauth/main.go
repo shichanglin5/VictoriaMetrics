@@ -69,7 +69,8 @@ var (
 	dryRun                   = flag.Bool("dryRun", false, "Whether to check only config files without running vmauth. The auth configuration file is validated. The -auth.config flag must be specified.")
 	removeXFFHTTPHeaderValue = flag.Bool(`removeXFFHTTPHeaderValue`, false, "Whether to remove the X-Forwarded-For HTTP header value from client requests before forwarding them to the backend. "+
 		"Recommended when vmauth is exposed to the internet.")
-	slowQuerySeconds = flag.Float64("slowQuerySeconds", 20, "Log slow queries taking more than this duration. ")
+	slowQuerySeconds   = flag.Float64("slowQuerySeconds", 20, "Log slow queries taking more than this duration. ")
+	defaultMinAttempts = flag.Int("minAttempts", 2, "最少重试几次，vmauth-proxy后端是一个域名，默认只会请求一次，失败不会重试，所以这里增加 minAttempts 默认至少重试一次")
 )
 
 func main() {
@@ -279,6 +280,9 @@ func processRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo) {
 	r.Body = rtb
 
 	maxAttempts := up.getBackendsCount()
+	if maxAttempts == 1 {
+		maxAttempts = *defaultMinAttempts
+	}
 	for i := 0; i < maxAttempts; i++ {
 		bu := up.getBackendURL()
 		if bu == nil {
