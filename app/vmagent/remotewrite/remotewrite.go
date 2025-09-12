@@ -163,6 +163,7 @@ var (
 //
 // Stop must be called for graceful shutdown.
 func Init() {
+	// 如果配置了 runtime.config (基于 mts 获取 remote write 配置)
 	if config.IsVmAgentRemoteWriteRuntimeConfigEnabled() {
 		overrideDefault = true
 		_, err := config.InitVMAgentConfig(loadRemoteWriteConfig)
