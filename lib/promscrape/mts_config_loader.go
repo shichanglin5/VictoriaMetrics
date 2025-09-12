@@ -81,6 +81,7 @@ func loadScrapeConfig(_ string) (*Config, error) {
 				targetGroup := result.Data[i]
 				count += len(targetGroup.Targets)
 				if jobName, ok := targetGroup.Labels[jobLabel]; ok {
+					groupJobName := jobName + "/" + targetGroup.GroupId
 					labels := promutil.GetLabels()
 					for k, v := range targetGroup.Labels {
 						labels.Add(k, v)
@@ -108,9 +109,9 @@ func loadScrapeConfig(_ string) (*Config, error) {
 						Targets: targetGroup.Targets,
 						Labels:  labels,
 					}
-					if jobScrapConfig, ok := jobScrapConfigs[jobName]; !ok {
+					if jobScrapConfig, ok := jobScrapConfigs[groupJobName]; !ok {
 						jobScrapConfig = &ScrapeConfig{
-							JobName: jobName,
+							JobName: groupJobName,
 							StaticConfigs: []StaticConfig{
 								staticConfig,
 							},
@@ -119,14 +120,22 @@ func loadScrapeConfig(_ string) (*Config, error) {
 							jobScrapConfig.ScrapeTimeout = promutil.NewDuration(time.Duration(targetGroup.ScrapeConfig.ScrapeTimeout))
 							jobScrapConfig.ScrapeInterval = promutil.NewDuration(time.Duration(targetGroup.ScrapeConfig.ScrapeInterval))
 							jobScrapConfig.MaxScrapeSize = targetGroup.ScrapeConfig.MaxScrapeSize
+
+							if targetGroup.ScrapeConfig.AuthHeaders != nil {
+								headers := make([]string, 0, len(targetGroup.ScrapeConfig.AuthHeaders))
+								for k, v := range targetGroup.ScrapeConfig.AuthHeaders {
+									headers = append(headers, fmt.Sprintf("%s:%s", k, v))
+								}
+								jobScrapConfig.HTTPClientConfig.Headers = headers
+							}
 						}
 						sws, err := getScrapeWorkConfig(jobScrapConfig, "", globalConfig)
 						if err != nil {
-							logger.Warnf("getScrapeWorkConfig for %s: %v", jobName, err)
+							logger.Warnf("getScrapeWorkConfig for %s: %v", groupJobName, err)
 							continue
 						}
 						jobScrapConfig.swc = sws
-						jobScrapConfigs[jobName] = jobScrapConfig
+						jobScrapConfigs[groupJobName] = jobScrapConfig
 					} else {
 						jobScrapConfig.StaticConfigs = append(jobScrapConfig.StaticConfigs, staticConfig)
 					}

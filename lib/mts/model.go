@@ -47,6 +47,7 @@ type PullTargetResult struct {
 
 // TargetGroup 目标targets
 type TargetGroup struct {
+	GroupId      string            `json:"groupId"`
 	Targets      []string          `json:"targets"`
 	Labels       map[string]string `json:"labels"`
 	ScrapeConfig *MtsScrapeConfig  `json:"scrapeConfig,omitempty"`
@@ -54,9 +55,10 @@ type TargetGroup struct {
 
 // MtsScrapeConfig 采集配置
 type MtsScrapeConfig struct {
-	ScrapeIdc      string         `json:"scrapeIdc,omitempty"`
-	ScrapeTimeout  model.Duration `json:"scrapeTimeout,omitempty"`
-	ScrapeInterval model.Duration `json:"scrapeInterval,omitempty"`
-	MaxScrapeSize  string         `json:"maxScrapeSize,omitempty"`
-	Tenant         string         `json:"tenant,omitempty"`
+	ScrapeIdc      string            `json:"scrapeIdc,omitempty"`
+	ScrapeTimeout  model.Duration    `json:"scrapeTimeout,omitempty"`
+	ScrapeInterval model.Duration    `json:"scrapeInterval,omitempty"`
+	MaxScrapeSize  string            `json:"maxScrapeSize,omitempty"`
+	Tenant         string            `json:"tenant,omitempty"`
+	AuthHeaders    map[string]string `json:"authHeaders,omitempty"`
 }
