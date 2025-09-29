@@ -396,7 +396,12 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 	removeHopHeaders(res.Header)
 	copyHeader(w.Header(), res.Header)
 	updateHeadersByConfig(w.Header(), hc.ResponseHeaders)
-	w.WriteHeader(res.StatusCode)
+	if res.StatusCode == http.StatusBadGateway {
+		// 处理502，避免多次502响应触发nginx剔除负载，导致vmauth不可用（单租户502导致vmauth被提出负载，进而影响其他租户的查询不可用）
+		w.WriteHeader(http.StatusInternalServerError)
+	} else {
+		w.WriteHeader(res.StatusCode)
+	}
 
 	copyBuf := copyBufPool.Get()
 	copyBuf.B = bytesutil.ResizeNoCopyNoOverallocate(copyBuf.B, 16*1024)
