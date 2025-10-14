@@ -35,6 +35,7 @@ type vmNativeProcessor struct {
 	s            *stats
 	rateLimit    int64
 	interCluster bool
+	checkHost    bool
 	cc           int
 	isNative     bool
 	alignToStep  bool
@@ -104,6 +105,9 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 		}
 	}
 
+	if filteredHosts != nil {
+		_ = filteredHosts.Close()
+	}
 	log.Println("Import finished!")
 	log.Print(p.s)
 
@@ -412,6 +416,11 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 	return nil
 }
 
+var filteredHosts *os.File
+
+// 在循环外部定义 once 和初始化函数
+var once sync.Once
+
 func (p *vmNativeProcessor) explore(ctx context.Context, src *native.Client, tenantID string, ranges [][]time.Time) (map[string][][]time.Time, error) {
 	log.Printf("Exploring metrics...")
 
@@ -426,6 +435,26 @@ func (p *vmNativeProcessor) explore(ctx context.Context, src *native.Client, ten
 			return nil, fmt.Errorf("cannot get metrics from %s on interval %v-%v: %w", src.Addr, r[0], r[1], err)
 		}
 		for i := range ms {
+			if p.checkHost && !checkHost(ms[i]) {
+				// 创建 filtered_hosts.txt 文件
+				once.Do(sync.OnceFunc(
+					func() {
+						f, err := os.Create("filtered_hosts.txt")
+						if err != nil {
+							log.Fatalf("cannot create filtered_hosts.txt: %s", err)
+						}
+						filteredHosts = f
+					}))
+				// 检查文件句柄是否有效
+				if filteredHosts != nil {
+					_, err := filteredHosts.WriteString(ms[i] + "\n") // 添加换行符
+					if err != nil {
+						log.Printf("cannot write filtered_hosts.txt: %s", err)
+					}
+				}
+				log.Printf("校验到非法host，跳过该host，host: %s", ms[i])
+				continue
+			}
 			metrics[ms[i]] = append(metrics[ms[i]], r)
 		}
 		bar.Increment()

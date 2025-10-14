@@ -56,6 +56,7 @@ const (
 	vmRateLimit  = "vm-rate-limit"
 
 	vmInterCluster = "vm-intercluster"
+	checkHostFlag  = "vm-check-host"
 
 	vmBackoffRetries     = "vm-backoff-retries"
 	vmBackoffFactor      = "vm-backoff-factor"
@@ -606,6 +607,10 @@ var (
 			Usage: "Enables cluster-to-cluster migration mode with automatic tenants data migration.\n" +
 				fmt.Sprintf(" In this mode --%s flag format is: 'http://vmselect:8481/'. --%s flag format is: http://vminsert:8480/. \n", vmNativeSrcAddr, vmNativeDstAddr) +
 				" TenantID will be appended automatically after discovering tenants from src.",
+		},
+		&cli.BoolFlag{
+			Name:  checkHostFlag,
+			Usage: "是否检查host：过滤掉uuid、域名子节包含全数字的",
 		},
 		&cli.UintFlag{
 			Name:  vmConcurrency,

@@ -352,6 +352,7 @@ func main() {
 					p := vmNativeProcessor{
 						rateLimit:    c.Int64(vmRateLimit),
 						interCluster: c.Bool(vmInterCluster),
+						checkHost:    c.Bool(checkHostFlag),
 						filter: native.Filter{
 							Match:       c.String(vmNativeFilterMatch),
 							TimeStart:   c.String(vmNativeFilterTimeStart),
