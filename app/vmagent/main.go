@@ -294,12 +294,12 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/pull/2670
 		path = strings.TrimSuffix(path, "/")
 	}
+	authToken := GetAuthToken(w, r)
 	switch path {
 	case "/prometheus/api/v1/write", "/api/v1/write", "/api/v1/push", "/prometheus/api/v1/push":
 		if protoparserutil.HandleVMProtoServerHandshake(w, r) {
 			return true
 		}
-		authToken := GetAuthToken(w, r)
 		if authToken == nil {
 			return true
 		}
@@ -312,8 +312,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	case "/prometheus/api/v1/import", "/api/v1/import":
+		if authToken == nil {
+			return true
+		}
 		vmimportRequests.Inc()
-		if err := vmimport.InsertHandler(nil, r); err != nil {
+		if err := vmimport.InsertHandler(authToken, r); err != nil {
 			vmimportErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -321,8 +324,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	case "/prometheus/api/v1/import/csv", "/api/v1/import/csv":
+		if authToken == nil {
+			return true
+		}
 		csvimportRequests.Inc()
-		if err := csvimport.InsertHandler(nil, r); err != nil {
+		if err := csvimport.InsertHandler(authToken, r); err != nil {
 			csvimportErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -330,8 +336,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	case "/prometheus/api/v1/import/native", "/api/v1/import/native":
+		if authToken == nil {
+			return true
+		}
 		nativeimportRequests.Inc()
-		if err := native.InsertHandler(nil, r); err != nil {
+		if err := native.InsertHandler(authToken, r); err != nil {
 			nativeimportErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -339,8 +348,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	case "/influx/write", "/influx/api/v2/write", "/write", "/api/v2/write":
+		if authToken == nil {
+			return true
+		}
 		influxWriteRequests.Inc()
-		if err := influx.InsertHandlerForHTTP(nil, r); err != nil {
+		if err := influx.InsertHandlerForHTTP(authToken, r); err != nil {
 			influxWriteErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
@@ -356,8 +368,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) bool {
 		influxutil.WriteHealthCheckResponse(w)
 		return true
 	case "/opentelemetry/api/v1/push", "/opentelemetry/v1/metrics":
+		if authToken == nil {
+			return true
+		}
 		opentelemetryPushRequests.Inc()
-		if err := opentelemetry.InsertHandler(nil, r); err != nil {
+		if err := opentelemetry.InsertHandler(authToken, r); err != nil {
 			opentelemetryPushErrors.Inc()
 			httpserver.Errorf(w, r, "%s", err)
 			return true
