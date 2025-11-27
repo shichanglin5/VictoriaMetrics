@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/json"
 	"fmt"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"io"
 	"log"
+	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -30,9 +35,12 @@ type vmNativeProcessor struct {
 	s            *stats
 	rateLimit    int64
 	interCluster bool
+	checkHost    bool
 	cc           int
 	isNative     bool
+	alignToStep  bool
 
+	continueOnRestart   bool
 	shardMigrationLabel string
 }
 
@@ -66,11 +74,17 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 
 	ranges := [][]time.Time{{start, end}}
 	if p.filter.Chunk != "" {
-		ranges, err = stepper.SplitDateRange(start, end, p.filter.Chunk, p.filter.TimeReverse)
+		ranges, err = stepper.SplitDateRange(start, end, p.filter.Chunk, p.filter.TimeReverse, p.alignToStep)
 		if err != nil {
 			return fmt.Errorf("failed to create date ranges for the given time filters: %w", err)
 		}
 	}
+
+	processedKeysCache := p.loadLastProcessedKeysCache()
+	defer func() {
+		p.saveProcessedKeysCache(processedKeysCache)
+	}()
+
 	tenants := []string{""}
 	if p.interCluster {
 		log.Printf("Discovering tenants...")
@@ -85,16 +99,92 @@ func (p *vmNativeProcessor) run(ctx context.Context) error {
 	}
 
 	for _, tenantID := range tenants {
-		err := p.runBackfilling(ctx, tenantID, ranges)
+		err := p.runBackfilling(ctx, tenantID, ranges, processedKeysCache)
 		if err != nil {
 			return fmt.Errorf("migration failed: %s", err)
 		}
 	}
 
+	if filteredHosts != nil {
+		_ = filteredHosts.Close()
+	}
 	log.Println("Import finished!")
 	log.Print(p.s)
 
 	return nil
+}
+
+func (p *vmNativeProcessor) saveProcessedKeysCache(processedKeysCache *sync.Map) {
+	if processedKeysCache == nil {
+		logger.Infof("skipping save processedKeys because processedKeysCache is nil")
+		return
+	}
+
+	processedKeys := make([]string, 0, 1024)
+	processedKeysCache.Range(func(k, v interface{}) bool {
+		processedKeys = append(processedKeys, k.(string))
+		return true
+	})
+	if len(processedKeys) == 0 {
+		logger.Infof("skipping save processedKeys because no processed keys cached")
+		return
+	}
+
+	marshalBytes, err := json.Marshal(processedKeys)
+	if err != nil {
+		logger.Errorf("failed to marshal processedKeys: %s", err)
+		return
+	}
+
+	migrationFileName := p.getMigrationContiueOnRestartFilepath()
+	err = os.MkdirAll(path.Dir(migrationFileName), 0755)
+	if err != nil {
+		logger.Errorf("failed to create directory %s: %s", path.Dir(migrationFileName), err)
+		return
+	}
+	file, err := os.Create(migrationFileName)
+	if err != nil {
+		logger.Errorf("failed to create directory %s: %s", path.Dir(migrationFileName), err)
+		return
+	}
+	_, err = file.Write(marshalBytes)
+	if err != nil {
+		logger.Errorf("failed to save processedKeys: %s", err)
+		return
+	}
+
+	logger.Infof("saved processedKeys: %s, keys count: %d", migrationFileName, len(processedKeys))
+}
+
+func (p *vmNativeProcessor) loadLastProcessedKeysCache() *sync.Map {
+	var processedKeysCache sync.Map
+	if p.continueOnRestart {
+		migrationFileName := p.getMigrationContiueOnRestartFilepath()
+		fileContent, err := os.ReadFile(migrationFileName)
+		if err != nil {
+			if os.IsNotExist(err) {
+				logger.Infof("skipping loading last migration processed keys from file[%s] because it doesn't exist", migrationFileName)
+				return &processedKeysCache
+			} else {
+				logger.Fatalf("cannot read last migration processed keys from file[%s]: %v", migrationFileName, err)
+			}
+		}
+		processKeys := make([]string, 0, 1024)
+		err = json.Unmarshal(fileContent, &processKeys)
+		if err != nil {
+			logger.Fatalf("cannot parse last migration processed keys from file[%s]: %w", migrationFileName, err)
+		}
+		logger.Infof("loaded last migration processed keys from file[%s], processed keys count: %d", migrationFileName, len(processKeys))
+		for _, processedKey := range processKeys {
+			processedKeysCache.Store(processedKey, struct{}{})
+		}
+	}
+	return &processedKeysCache
+}
+
+func (p *vmNativeProcessor) getMigrationContiueOnRestartFilepath() string {
+	migrationTaskMd5 := fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("<%s><%s><%s><%s><%s><%v>", p.filter.TimeStart, p.filter.TimeEnd, p.filter.Chunk, p.filter.Match, p.shardMigrationLabel, p.interCluster))))
+	return path.Join("vmctl_migration_continue_on_restart", migrationTaskMd5)
 }
 
 func (p *vmNativeProcessor) do(ctx context.Context, f native.Filter, srcURL, dstURL string, bar barpool.Bar) error {
@@ -117,13 +207,13 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 		return fmt.Errorf("failed to init export pipe: %w", err)
 	}
 
-	if p.shardMigrationLabel == "" {
-		pr := bar.NewProxyReader(reader)
-		if pr != nil {
-			reader = pr
-			fmt.Printf("Continue import process with filter %s:\n", f.String())
-		}
-	}
+	//if p.shardMigrationLabel == "" {
+	//	pr := bar.NewProxyReader(reader)
+	//	if pr != nil {
+	//		reader = pr
+	//		fmt.Printf("Continue import process with filter %s:\n", f.String())
+	//	}
+	//}
 
 	pr, pw := io.Pipe()
 	importCh := make(chan error)
@@ -160,7 +250,7 @@ func (p *vmNativeProcessor) runSingle(ctx context.Context, f native.Filter, srcU
 	return <-importCh
 }
 
-func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string, ranges [][]time.Time) error {
+func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string, ranges [][]time.Time, processedKeysCache *sync.Map) error {
 	exportAddr := nativeExportAddr
 	importAddr := nativeImportAddr
 	if p.isNative {
@@ -199,12 +289,12 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		"": ranges,
 	}
 
-	format := nativeSingleProcessTpl
 	barPrefix := "Requests to make"
 	if p.interCluster {
 		barPrefix = fmt.Sprintf("Requests to make for tenant %s", tenantID)
 	}
 
+	format := fmt.Sprintf(nativeWithBackoffTpl, barPrefix)
 	if p.shardMigrationLabel != "" {
 		format = fmt.Sprintf(nativeWithBackoffTpl, barPrefix)
 		labelValues, err = p.explore(ctx, p.src, tenantID, ranges)
@@ -223,6 +313,8 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 			requestsToMake += len(m)
 		}
 		foundSeriesMsg = fmt.Sprintf("Found %d unique label values to import. Total import/export requests to make %d", len(labelValues), requestsToMake)
+	} else {
+		requestsToMake = len(ranges)
 	}
 
 	if !p.interCluster {
@@ -249,21 +341,46 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 		go func() {
 			defer wg.Done()
 			for f := range filterCh {
+				cacheKey := fmt.Sprintf("tenant<%s>, match<%s>, timeStart<%s>, timeEnd<%s>", tenantID, f.Match, f.TimeStart, f.TimeEnd)
+				if _, ok := processedKeysCache.Load(cacheKey); ok {
+					//logger.Infof("skipping processed key %q, because it has been process in last migration.", cacheKey)
+					bar.Increment()
+					continue
+				}
+
 				if p.shardMigrationLabel != "" {
 					if err := p.do(ctx, f, srcURL, dstURL, nil); err != nil {
 						errCh <- err
 						return
 					}
+					processedKeysCache.Store(cacheKey, true)
 					bar.Increment()
 				} else {
-					if err := p.runSingle(ctx, f, srcURL, dstURL, bar); err != nil {
+					if err := p.runSingle(ctx, f, srcURL, dstURL, nil); err != nil {
 						errCh <- err
 						return
 					}
+					bar.Increment()
 				}
 			}
 		}()
 	}
+
+	// 每分钟（并且loopCount大于 50）打印传输信息
+	go func() {
+		tick := time.Tick(time.Minute)
+		for {
+			select {
+			case <-tick:
+				p.saveProcessedKeysCache(processedKeysCache)
+				logger.Infof("定时打印同步统计：\n%s", p.s)
+			case <-ctx.Done():
+				return
+			case _ = <-errCh:
+				return
+			}
+		}
+	}()
 
 	// any error breaks the import
 	for labelValue, mRanges := range labelValues {
@@ -299,6 +416,11 @@ func (p *vmNativeProcessor) runBackfilling(ctx context.Context, tenantID string,
 	return nil
 }
 
+var filteredHosts *os.File
+
+// 在循环外部定义 once 和初始化函数
+var once sync.Once
+
 func (p *vmNativeProcessor) explore(ctx context.Context, src *native.Client, tenantID string, ranges [][]time.Time) (map[string][][]time.Time, error) {
 	log.Printf("Exploring metrics...")
 
@@ -313,6 +435,26 @@ func (p *vmNativeProcessor) explore(ctx context.Context, src *native.Client, ten
 			return nil, fmt.Errorf("cannot get metrics from %s on interval %v-%v: %w", src.Addr, r[0], r[1], err)
 		}
 		for i := range ms {
+			if p.checkHost && !checkHost(ms[i]) {
+				// 创建 filtered_hosts.txt 文件
+				once.Do(sync.OnceFunc(
+					func() {
+						f, err := os.Create("filtered_hosts.txt")
+						if err != nil {
+							log.Fatalf("cannot create filtered_hosts.txt: %s", err)
+						}
+						filteredHosts = f
+					}))
+				// 检查文件句柄是否有效
+				if filteredHosts != nil {
+					_, err := filteredHosts.WriteString(ms[i] + "\n") // 添加换行符
+					if err != nil {
+						log.Printf("cannot write filtered_hosts.txt: %s", err)
+					}
+				}
+				log.Printf("校验到非法host，跳过该host，host: %s", ms[i])
+				continue
+			}
 			metrics[ms[i]] = append(metrics[ms[i]], r)
 		}
 		bar.Increment()
@@ -367,16 +509,22 @@ func byteCountSI(b int64) string {
 }
 
 func buildMatchWithFilter(filter string, shardMigrationLabelName, shardMigrationLabelValue string) (string, error) {
-	tfss, err := searchutil.ParseMetricSelector(filter)
-	if err != nil {
-		return "", err
-	}
-
-	if filter == shardMigrationLabelValue || shardMigrationLabelValue == "" {
-		return filter, nil
+	var tfss [][]storage.TagFilter
+	var err error
+	if filter != "" {
+		tfss, err = searchutil.ParseMetricSelector(filter)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	nameFilter := fmt.Sprintf("%s=%q", shardMigrationLabelName, shardMigrationLabelValue)
+	if len(tfss) == 0 {
+		if shardMigrationLabelValue == "" {
+			return "{__name__=~\".+\"}", nil
+		}
+		return fmt.Sprintf("{%s}", nameFilter), nil
+	}
 
 	var filters []string
 	for _, tfs := range tfss {

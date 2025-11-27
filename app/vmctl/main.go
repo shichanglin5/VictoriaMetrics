@@ -279,10 +279,6 @@ func main() {
 				Action: func(c *cli.Context) error {
 					fmt.Println("VictoriaMetrics Native import mode")
 
-					if c.String(vmNativeFilterMatch) == "" {
-						return fmt.Errorf("flag %q can't be empty", vmNativeFilterMatch)
-					}
-
 					bfRetries := c.Int(vmNativeBackoffRetries)
 					bfFactor := c.Float64(vmNativeBackoffFactor)
 					bfMinDuration := c.Duration(vmNativeBackoffMinDuration)
@@ -356,6 +352,7 @@ func main() {
 					p := vmNativeProcessor{
 						rateLimit:    c.Int64(vmRateLimit),
 						interCluster: c.Bool(vmInterCluster),
+						checkHost:    c.Bool(checkHostFlag),
 						filter: native.Filter{
 							Match:       c.String(vmNativeFilterMatch),
 							TimeStart:   c.String(vmNativeFilterTimeStart),
@@ -377,8 +374,10 @@ func main() {
 						},
 						backoff:             bf,
 						cc:                  c.Int(vmConcurrency),
+						continueOnRestart:   c.Bool(vmNativeContinueOnRestart),
 						shardMigrationLabel: c.String(vmNativeShardMigrationLabel),
 						isNative:            !c.Bool(vmNativeDisableBinaryProtocol),
+						alignToStep:         c.Bool(vmNativeSplitRangeAlignToStep),
 					}
 					return p.run(ctx)
 				},

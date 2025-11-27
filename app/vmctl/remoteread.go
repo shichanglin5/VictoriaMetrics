@@ -40,7 +40,7 @@ func (rrp *remoteReadProcessor) run(ctx context.Context) error {
 		rrp.cc = 1
 	}
 
-	ranges, err := stepper.SplitDateRange(*rrp.filter.timeStart, *rrp.filter.timeEnd, rrp.filter.chunk, rrp.filter.timeReverse)
+	ranges, err := stepper.SplitDateRange(*rrp.filter.timeStart, *rrp.filter.timeEnd, rrp.filter.chunk, rrp.filter.timeReverse, false)
 	if err != nil {
 		return fmt.Errorf("failed to create date ranges for the given time filters: %v", err)
 	}

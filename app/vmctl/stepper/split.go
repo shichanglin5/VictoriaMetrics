@@ -21,8 +21,7 @@ const (
 
 // SplitDateRange splits start-end range in a subset of ranges respecting the given step
 // Ranges with granularity of StepMonth are aligned to 1st of each month in order to improve export efficiency at block transfer level
-func SplitDateRange(start, end time.Time, step string, timeReverse bool) ([][]time.Time, error) {
-
+func SplitDateRange(start, end time.Time, step string, timeReverse, alignToStep bool) ([][]time.Time, error) {
 	if start.After(end) {
 		return nil, fmt.Errorf("start time %q should come before end time %q", start.Format(time.RFC3339), end.Format(time.RFC3339))
 	}
@@ -66,7 +65,7 @@ func SplitDateRange(start, end time.Time, step string, timeReverse bool) ([][]ti
 
 	for end.After(currentStep) {
 		s, e := nextStep(currentStep)
-		if e.After(end) {
+		if !alignToStep && e.After(end) {
 			e = end
 		}
 		ranges = append(ranges, []time.Time{s, e})

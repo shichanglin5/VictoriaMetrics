@@ -11,8 +11,10 @@ type Filter struct {
 	TimeReverse bool
 }
 
-func (f Filter) String() string {
-	s := fmt.Sprintf("\n\tfilter: match[]=%s", f.Match)
+func (f Filter) String() (s string) {
+	if f.Match != "" {
+		s += fmt.Sprintf("\n\tfilter: match[]=%s", f.Match)
+	}
 	if f.TimeStart != "" {
 		s += fmt.Sprintf("\n\tstart: %s", f.TimeStart)
 	}

@@ -23,7 +23,7 @@ func TestSplitDateRange_Failure(t *testing.T) {
 		start := mustParseDatetime(startStr)
 		end := mustParseDatetime(endStr)
 
-		_, err := SplitDateRange(start, end, granularity, false)
+		_, err := SplitDateRange(start, end, granularity, false, false)
 		if err == nil {
 			t.Fatalf("expecting non-nil result")
 		}
@@ -43,7 +43,7 @@ func TestSplitDateRange_Success(t *testing.T) {
 		start := mustParseDatetime(startStr)
 		end := mustParseDatetime(endStr)
 
-		result, err := SplitDateRange(start, end, granularity, false)
+		result, err := SplitDateRange(start, end, granularity, false, false)
 		if err != nil {
 			t.Fatalf("SplitDateRange() error: %s", err)
 		}
@@ -201,7 +201,7 @@ func TestSplitDateRange_Reverse_Failure(t *testing.T) {
 		start := mustParseDatetime(startStr)
 		end := mustParseDatetime(endStr)
 
-		_, err := SplitDateRange(start, end, granularity, true)
+		_, err := SplitDateRange(start, end, granularity, true, false)
 		if err == nil {
 			t.Fatalf("expecting non-nil error")
 		}
@@ -221,7 +221,7 @@ func TestSplitDateRange_Reverse_Success(t *testing.T) {
 		start := mustParseDatetime(startStr)
 		end := mustParseDatetime(endStr)
 
-		result, err := SplitDateRange(start, end, granularity, true)
+		result, err := SplitDateRange(start, end, granularity, true, false)
 		if err != nil {
 			t.Fatalf("SplitDateRange() error: %s", err)
 		}
